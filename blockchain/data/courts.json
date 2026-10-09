@@ -1,0 +1,16 @@
+[
+  { "location": "Thiruvananthapuram", "name": "Thiruvananthapuram District Court" },
+  { "location": "Kollam", "name": "Kollam District Court" },
+  { "location": "Pathanamthitta", "name": "Pathanamthitta District Court" },
+  { "location": "Alappuzha", "name": "Alappuzha District Court" },
+  { "location": "Kottayam", "name": "Kottayam District Court" },
+  { "location": "Idukki", "name": "Idukki District Court" },
+  { "location": "Ernakulam", "name": "Ernakulam District Court" },
+  { "location": "Thrissur", "name": "Thrissur District Court" },
+  { "location": "Palakkad", "name": "Palakkad District Court" },
+  { "location": "Malappuram", "name": "Malappuram District Court" },
+  { "location": "Kozhikode", "name": "Kozhikode District Court" },
+  { "location": "Wayanad", "name": "Wayanad District Court" },
+  { "location": "Kannur", "name": "Kannur District Court" },
+  { "location": "Kasaragod", "name": "Kasaragod District Court" }
+]
