@@ -1,16 +1,16 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import "@openzeppelin/contracts/access/AccessControl.sol";
+import "./AdminMultisig.sol";
+import "./PeopleRegistry.sol";
 
-/// @title Blockchain-Based Evidence Protection and Chain of Custody (case-based access)
+/// @title Evidence chain of custody: admin-reviewed evidence, station-based officers, court notification.
 /// @dev Keep on-chain text GENERIC (e.g. "Seized laptop"). Names, addresses and detailed
 ///      notes belong in the off-chain database. On-chain data can never be deleted.
-contract EvidenceRegistry is AccessControl {
-    // ---------- Roles (Admin = DEFAULT_ADMIN_ROLE, held by the AdminMultisig) ----------
-    bytes32 public constant INVESTIGATOR_ROLE = keccak256("INVESTIGATOR_ROLE");
-    bytes32 public constant FORENSIC_ROLE = keccak256("FORENSIC_ROLE");
-    bytes32 public constant COURT_ROLE = keccak256("COURT_ROLE");
+///      Use a unique case ID such as "<station>/<crime no>/<year>".
+contract EvidenceRegistry {
+    AdminMultisig public immutable admins;
+    PeopleRegistry public immutable people;
 
     // ---------- Types ----------
     enum CaseStatus {
@@ -18,6 +18,11 @@ contract EvidenceRegistry is AccessControl {
         Open,
         Rejected,
         Closed
+    }
+    enum Review {
+        Pending,
+        Approved,
+        Rejected
     }
     enum Stage {
         Collected,
@@ -29,12 +34,22 @@ contract EvidenceRegistry is AccessControl {
         Flagged,
         Revoked
     }
+    enum Action {
+        Registered,
+        Approved,
+        Rejected,
+        Offered,
+        Accepted,
+        OfferCancelled,
+        Reassigned,
+        SubmittedToCourt
+    }
 
     struct Case {
         string caseId;
         string title; // keep generic
-        string location; // jurisdiction location chosen by the investigator
-        bytes32 courtId; // court resolved automatically from the location
+        uint256 stationId;
+        uint256 courtId; // found automatically from the station's location
         address leadInvestigator;
         CaseStatus status;
         uint256 createdAt;
@@ -44,28 +59,37 @@ contract EvidenceRegistry is AccessControl {
         uint256 id;
         string caseId;
         string description; // keep generic
-        string location; // short place of collection, not a full address
+        string location; // short place of seizure, not a full address
         string collectionMethod; // short, e.g. "Seized", "Imaged on site"
         bytes32 fileHash; // SHA-256 of the evidence file
-        bytes32 certificateHash; // hash of the electronic-evidence certificate (0 if not applicable)
         address collector;
         address currentHolder;
         Stage stage;
         Status status;
+        Review review;
         uint256 createdAt;
     }
 
-    /// Input for registration (a struct keeps the function simple)
+    /// Supporting documents (hashes of files kept off-chain)
+    struct Docs {
+        uint64 seizedAt; // when the item was seized (unix seconds)
+        bool isElectronic;
+        bytes32 seizureMemoHash; // seizure memo / panchnama (required)
+        bytes32 recordingHash; // audio-video recording of search and seizure (optional)
+        bytes32 certificateHash; // electronic-record certificate (required if isElectronic)
+    }
+
     struct NewEvidence {
         string caseId;
         string description;
         string location;
         string collectionMethod;
         bytes32 fileHash;
-        bytes32 certificateHash;
+        Docs docs;
     }
 
     struct CustodyRecord {
+        Action action;
         address from;
         address to;
         Stage stage;
@@ -80,49 +104,42 @@ contract EvidenceRegistry is AccessControl {
         uint256 timestamp;
     }
 
-    // ---------- Storage ----------
-    // Courts: registered with a location, nothing is predefined in code
-    bytes32[] private courtIds;
-    string[] private locations;
-    mapping(bytes32 => string) public courtName; // courtId => name
-    mapping(bytes32 => string) public courtLocation; // courtId => location
-    mapping(bytes32 => bytes32) private locationToCourt; // keccak256(location) => courtId
-    mapping(address => bytes32) public officialCourt; // court official => courtId
+    struct Report {
+        address analyst;
+        bytes32 reportHash;
+        string note;
+        uint256 timestamp;
+    }
 
+    // ---------- Storage ----------
     bytes32[] private caseKeys; // key = keccak256(caseId)
     mapping(bytes32 => Case) private cases;
     mapping(bytes32 => mapping(address => bool)) private isAnalyst;
     mapping(bytes32 => address[]) private analysts;
+    mapping(bytes32 => uint256) public requestedLabForCase;
     mapping(bytes32 => uint256[]) private caseEvidence;
 
     uint256 public count;
     mapping(uint256 => Evidence) private evidences;
+    mapping(uint256 => Docs) private docs;
     mapping(uint256 => CustodyRecord[]) private history;
     mapping(uint256 => StatusRecord[]) private statusHistory;
+    mapping(uint256 => Report[]) private reports;
+    mapping(uint256 => address) public pendingTo; // custody offer waiting to be accepted
     mapping(bytes32 => uint256) public hashToId;
 
-    // ---------- Events (audit log + court notifications) ----------
-    event CourtRegistered(
-        bytes32 indexed courtId,
-        string name,
-        string location
-    );
-    event CourtOfficialAssigned(
-        bytes32 indexed courtId,
-        address indexed official
-    );
-
+    // ---------- Events ----------
     // The court of that location listens to these three (filter by courtId)
     event CaseOpened(
-        bytes32 indexed courtId,
+        uint256 indexed courtId,
         bytes32 indexed caseKey,
         address indexed investigator,
         string caseId,
         uint256 timestamp
     );
-    event EvidenceRegistered(
+    event EvidenceApproved(
         uint256 indexed id,
-        bytes32 indexed courtId,
+        uint256 indexed courtId,
         address indexed collector,
         bytes32 caseKey,
         bytes32 fileHash,
@@ -130,13 +147,35 @@ contract EvidenceRegistry is AccessControl {
     );
     event EvidenceSubmittedToCourt(
         uint256 indexed id,
-        bytes32 indexed courtId,
+        uint256 indexed courtId,
         address indexed by,
         uint256 timestamp
     );
 
+    // For the admins' review queue
+    event EvidenceSubmittedForReview(
+        uint256 indexed id,
+        address indexed collector,
+        bytes32 indexed caseKey,
+        bytes32 fileHash,
+        uint256 timestamp
+    );
+    event AnalysisRequested(
+        bytes32 indexed caseKey,
+        uint256 indexed labId,
+        address indexed by,
+        string note,
+        uint256 timestamp
+    );
+
+    event EvidenceRejected(
+        uint256 indexed id,
+        address indexed collector,
+        string reason,
+        uint256 timestamp
+    );
     event CaseDecision(
-        bytes32 indexed courtId,
+        uint256 indexed courtId,
         bytes32 indexed caseKey,
         address indexed by,
         CaseStatus status,
@@ -146,12 +185,22 @@ contract EvidenceRegistry is AccessControl {
     event AnalystAssigned(
         bytes32 indexed caseKey,
         address indexed analyst,
-        address indexed by,
         uint256 timestamp
     );
     event AnalystRemoved(
         bytes32 indexed caseKey,
         address indexed analyst,
+        uint256 timestamp
+    );
+    event CustodyOffered(
+        uint256 indexed id,
+        address indexed from,
+        address indexed to,
+        string reason,
+        uint256 timestamp
+    );
+    event CustodyOfferCancelled(
+        uint256 indexed id,
         address indexed by,
         uint256 timestamp
     );
@@ -160,7 +209,12 @@ contract EvidenceRegistry is AccessControl {
         address indexed from,
         address indexed to,
         Stage stage,
-        string reason,
+        uint256 timestamp
+    );
+    event AnalysisReportAdded(
+        uint256 indexed id,
+        address indexed analyst,
+        bytes32 reportHash,
         uint256 timestamp
     );
     event EvidenceVerified(
@@ -183,40 +237,114 @@ contract EvidenceRegistry is AccessControl {
         uint256 timestamp
     );
 
-    constructor() {
-        _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
+    modifier onlyAdmin() {
+        require(msg.sender == address(admins), "Only the admin multisig");
+        _;
+    }
+
+    constructor(address adminMultisig, address peopleRegistry) {
+        admins = AdminMultisig(adminMultisig);
+        people = PeopleRegistry(peopleRegistry);
     }
 
     // =====================================================
     // Internal helpers
     // =====================================================
+    function _hasRole(
+        address a,
+        PeopleRegistry.Role r
+    ) internal view returns (bool) {
+        return people.activeRole(a) == r;
+    }
+
     function _isCourtOf(
         address a,
-        bytes32 courtId
+        uint256 courtId
     ) internal view returns (bool) {
-        return hasRole(COURT_ROLE, a) && officialCourt[a] == courtId;
+        return
+            _hasRole(a, PeopleRegistry.Role.CourtOfficial) &&
+            people.unitOf(a) == courtId;
+    }
+
+    function _isLead(address a, Case storage c) internal view returns (bool) {
+        return
+            a == c.leadInvestigator &&
+            _hasRole(a, PeopleRegistry.Role.Investigator);
+    }
+
+    function _isAnalystOf(address a, bytes32 key) internal view returns (bool) {
+        return isAnalyst[key][a] && _hasRole(a, PeopleRegistry.Role.Analyst);
+    }
+
+    /// Investigator or assigned analyst (people who can hold evidence)
+    function _isParticipant(
+        address a,
+        bytes32 key
+    ) internal view returns (bool) {
+        return _isLead(a, cases[key]) || _isAnalystOf(a, key);
+    }
+
+    /// Who may see a case: its lead investigator, assigned analysts, the case's court
+    function _canViewCase(address a, bytes32 key) internal view returns (bool) {
+        Case storage c = cases[key];
+        if (c.status == CaseStatus.None) return false;
+        return
+            _isLead(a, c) || _isAnalystOf(a, key) || _isCourtOf(a, c.courtId);
     }
 
     function _caseKey(Evidence storage e) internal view returns (bytes32) {
         return keccak256(bytes(e.caseId));
     }
 
-    /// Who may see a case and its evidence: lead investigator, assigned analysts, the case's court
-    function _canViewCase(address a, bytes32 key) internal view returns (bool) {
-        Case storage c = cases[key];
-        if (c.status == CaseStatus.None) return false;
-        return
-            a == c.leadInvestigator ||
-            isAnalyst[key][a] ||
-            _isCourtOf(a, c.courtId);
+    /// Approved evidence: investigator, analysts, the court. Pending or rejected: only the
+    /// officer who registered it and the admins who review it.
+    function _canSeeEvidence(
+        address a,
+        Evidence storage e
+    ) internal view returns (bool) {
+        bytes32 key = _caseKey(e);
+        if (e.review == Review.Approved) return _canViewCase(a, key);
+        return _isLead(a, cases[key]) || admins.isOwner(a);
     }
 
     function _viewable(uint256 id) internal view returns (Evidence storage e) {
         e = evidences[id];
         require(e.id != 0, "Evidence not found");
+        require(_canSeeEvidence(msg.sender, e), "Not authorized for this case");
+    }
+
+    /// Evidence that can still move: approved, active, not yet submitted, case open
+    function _movable(uint256 id) internal view returns (Evidence storage e) {
+        e = evidences[id];
+        require(e.id != 0, "Evidence not found");
+        require(e.review == Review.Approved, "Evidence not approved");
+        require(e.status == Status.Active, "Evidence is flagged or revoked");
         require(
-            _canViewCase(msg.sender, _caseKey(e)),
-            "Not authorized for this case"
+            e.stage != Stage.SubmittedToCourt,
+            "Already submitted to court"
+        );
+        require(
+            cases[_caseKey(e)].status == CaseStatus.Open,
+            "Case is not open"
+        );
+    }
+
+    function _log(
+        uint256 id,
+        Action action,
+        address from,
+        address to,
+        string memory reason
+    ) internal {
+        history[id].push(
+            CustodyRecord(
+                action,
+                from,
+                to,
+                evidences[id].stage,
+                reason,
+                block.timestamp
+            )
         );
     }
 
@@ -238,7 +366,6 @@ contract EvidenceRegistry is AccessControl {
         );
     }
 
-    /// Court decision on an open case (reject or close)
     function _decide(
         string memory caseId,
         CaseStatus to,
@@ -247,7 +374,6 @@ contract EvidenceRegistry is AccessControl {
         bytes32 key = keccak256(bytes(caseId));
         Case storage c = cases[key];
         require(c.status == CaseStatus.Open, "Case is not open");
-        require(_isCourtOf(msg.sender, c.courtId), "Not this case's court");
         c.status = to;
         emit CaseDecision(
             c.courtId,
@@ -260,66 +386,30 @@ contract EvidenceRegistry is AccessControl {
     }
 
     // =====================================================
-    // Admin: courts (Admin is the multisig, so these need several approvals)
-    // =====================================================
-
-    /// Register a court for a location. One court per location.
-    function registerCourt(
-        string calldata name,
-        string calldata location
-    ) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        require(
-            bytes(name).length > 0 && bytes(location).length > 0,
-            "Name and location required"
-        );
-        bytes32 id = keccak256(bytes(name));
-        bytes32 locKey = keccak256(bytes(location));
-        require(bytes(courtName[id]).length == 0, "Court exists");
-        require(
-            locationToCourt[locKey] == bytes32(0),
-            "Location already has a court"
-        );
-
-        courtName[id] = name;
-        courtLocation[id] = location;
-        locationToCourt[locKey] = id;
-        courtIds.push(id);
-        locations.push(location);
-        emit CourtRegistered(id, name, location);
-    }
-
-    /// Use this (not grantRole) so the official is tied to one court
-    function assignCourtOfficial(
-        address official,
-        bytes32 courtId
-    ) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        require(bytes(courtName[courtId]).length > 0, "Unknown court");
-        officialCourt[official] = courtId;
-        _grantRole(COURT_ROLE, official);
-        emit CourtOfficialAssigned(courtId, official);
-    }
-
-    // =====================================================
     // Cases
     // =====================================================
 
-    /// Investigator opens a case for a location. The location's court is linked
-    /// automatically and notified.
-    function openCase(
-        string calldata caseId,
-        string calldata title,
-        string calldata location
-    ) external onlyRole(INVESTIGATOR_ROLE) {
+    /// An approved investigator opens a case. The station comes from their profile and the
+    /// court of that station's location is found automatically and notified.
+    function openCase(string calldata caseId, string calldata title) external {
+        require(
+            _hasRole(msg.sender, PeopleRegistry.Role.Investigator),
+            "Only an approved investigator"
+        );
         require(bytes(caseId).length > 0, "Case ID required");
-        bytes32 courtId = locationToCourt[keccak256(bytes(location))];
-        require(courtId != bytes32(0), "No court registered for this location");
+        uint256 stationId = people.unitOf(msg.sender);
+        uint256 courtId = people.courtOfUnit(stationId);
+        require(
+            courtId != 0,
+            "No court registered for this station's location"
+        );
         bytes32 key = keccak256(bytes(caseId));
         require(cases[key].status == CaseStatus.None, "Case ID already used");
 
         Case storage c = cases[key];
         c.caseId = caseId;
         c.title = title;
-        c.location = location;
+        c.stationId = stationId;
         c.courtId = courtId;
         c.leadInvestigator = msg.sender;
         c.status = CaseStatus.Open;
@@ -329,47 +419,78 @@ contract EvidenceRegistry is AccessControl {
         emit CaseOpened(courtId, key, msg.sender, caseId, block.timestamp);
     }
 
-    /// Court rejects a case (e.g. wrong jurisdiction). No new evidence or transfers after this.
+    /// Case decisions are recorded by the admin multisig; courts have read-only access.
     function rejectCase(
         string calldata caseId,
         string calldata reason
-    ) external {
+    ) external onlyAdmin {
         _decide(caseId, CaseStatus.Rejected, reason);
     }
 
-    function closeCase(string calldata caseId, string calldata note) external {
+    function closeCase(
+        string calldata caseId,
+        string calldata note
+    ) external onlyAdmin {
         _decide(caseId, CaseStatus.Closed, note);
     }
 
-    /// Lead investigator adds a forensic analyst to the case
-    function assignAnalyst(string calldata caseId, address analyst) external {
+    /// Lead investigator asks the admins to assign a forensic analyst from a lab
+    function requestAnalysis(
+        string calldata caseId,
+        uint256 labId,
+        string calldata note
+    ) external {
         bytes32 key = keccak256(bytes(caseId));
         Case storage c = cases[key];
         require(c.status == CaseStatus.Open, "Case is not open");
-        require(msg.sender == c.leadInvestigator, "Only lead investigator");
-        require(hasRole(FORENSIC_ROLE, analyst), "Not a forensic analyst");
-        require(!isAnalyst[key][analyst], "Already assigned");
-
-        isAnalyst[key][analyst] = true;
-        analysts[key].push(analyst);
-        emit AnalystAssigned(key, analyst, msg.sender, block.timestamp);
+        require(_isLead(msg.sender, c), "Only lead investigator");
+        (PeopleRegistry.UnitType t, , ) = people.unitInfo(labId);
+        require(t == PeopleRegistry.UnitType.Lab, "Not a forensic lab");
+        requestedLabForCase[key] = labId;
+        emit AnalysisRequested(key, labId, msg.sender, note, block.timestamp);
     }
 
-    /// Lead investigator removes an analyst. Blocked while the analyst still holds
-    /// (non-submitted) evidence on this case, so custody can never get stuck.
-    function removeAnalyst(string calldata caseId, address analyst) external {
+    /// Admins (multisig) assign an approved forensic analyst to the case
+    function assignAnalyst(
+        string calldata caseId,
+        address analyst
+    ) external onlyAdmin {
         bytes32 key = keccak256(bytes(caseId));
-        Case storage c = cases[key];
-        require(c.status == CaseStatus.Open, "Case is not open");
-        require(msg.sender == c.leadInvestigator, "Only lead investigator");
+        require(cases[key].status == CaseStatus.Open, "Case is not open");
+        uint256 requestedLabId = requestedLabForCase[key];
+        require(requestedLabId != 0, "Analysis was not requested");
+        require(
+            _hasRole(analyst, PeopleRegistry.Role.Analyst),
+            "Not an approved forensic analyst"
+        );
+        require(
+            people.unitOf(analyst) == requestedLabId,
+            "Analyst is not from requested lab"
+        );
+        require(!isAnalyst[key][analyst], "Already assigned");
+        requestedLabForCase[key] = 0;
+        isAnalyst[key][analyst] = true;
+        analysts[key].push(analyst);
+        emit AnalystAssigned(key, analyst, block.timestamp);
+    }
+
+    /// Admins remove an analyst. Blocked while the analyst still holds evidence on this case.
+    function removeAnalyst(
+        string calldata caseId,
+        address analyst
+    ) external onlyAdmin {
+        bytes32 key = keccak256(bytes(caseId));
         require(isAnalyst[key][analyst], "Not assigned to this case");
 
         uint256[] storage ids = caseEvidence[key];
         for (uint256 i = 0; i < ids.length; i++) {
             Evidence storage ev = evidences[ids[i]];
-            if (ev.stage != Stage.SubmittedToCourt) {
+            if (
+                ev.review == Review.Approved &&
+                ev.stage != Stage.SubmittedToCourt
+            ) {
                 require(
-                    ev.currentHolder != analyst,
+                    ev.currentHolder != analyst && pendingTo[ids[i]] != analyst,
                     "Analyst still holds evidence"
                 );
             }
@@ -384,23 +505,36 @@ contract EvidenceRegistry is AccessControl {
                 break;
             }
         }
-        emit AnalystRemoved(key, analyst, msg.sender, block.timestamp);
+        emit AnalystRemoved(key, analyst, block.timestamp);
     }
 
     // =====================================================
-    // Evidence
+    // Evidence: registration and admin review
     // =====================================================
 
-    /// Register evidence under an open case. Notifies the case's court.
+    /// The lead investigator submits evidence. It stays PENDING until the admins approve it.
     function registerEvidence(
         NewEvidence calldata input
-    ) external onlyRole(INVESTIGATOR_ROLE) returns (uint256 id) {
+    ) external returns (uint256 id) {
         bytes32 key = keccak256(bytes(input.caseId));
         Case storage c = cases[key];
         require(c.status == CaseStatus.Open, "Case is not open");
-        require(c.leadInvestigator == msg.sender, "Not lead investigator");
+        require(_isLead(msg.sender, c), "Not lead investigator");
         require(input.fileHash != bytes32(0), "Empty hash");
         require(hashToId[input.fileHash] == 0, "Evidence already registered");
+        require(
+            input.docs.seizureMemoHash != bytes32(0),
+            "Seizure memo hash required"
+        );
+        require(
+            !input.docs.isElectronic ||
+                input.docs.certificateHash != bytes32(0),
+            "Electronic evidence needs its certificate hash"
+        );
+        require(
+            input.docs.seizedAt != 0 && input.docs.seizedAt <= block.timestamp,
+            "Invalid seizure time"
+        );
 
         id = ++count;
 
@@ -411,28 +545,29 @@ contract EvidenceRegistry is AccessControl {
         e.location = input.location;
         e.collectionMethod = input.collectionMethod;
         e.fileHash = input.fileHash;
-        e.certificateHash = input.certificateHash;
         e.collector = msg.sender;
         e.currentHolder = msg.sender;
-        e.stage = Stage.Collected;
-        e.status = Status.Active;
-        e.createdAt = block.timestamp;
+        e.createdAt = block.timestamp; // stage, status and review start at their first value
+
+        Docs storage d = docs[id];
+        d.seizedAt = input.docs.seizedAt;
+        d.isElectronic = input.docs.isElectronic;
+        d.seizureMemoHash = input.docs.seizureMemoHash;
+        d.recordingHash = input.docs.recordingHash;
+        d.certificateHash = input.docs.certificateHash;
 
         hashToId[input.fileHash] = id;
         caseEvidence[key].push(id);
-        history[id].push(
-            CustodyRecord(
-                address(0),
-                msg.sender,
-                Stage.Collected,
-                "Evidence collected",
-                block.timestamp
-            )
+        _log(
+            id,
+            Action.Registered,
+            address(0),
+            msg.sender,
+            "Submitted for admin review"
         );
 
-        emit EvidenceRegistered(
+        emit EvidenceSubmittedForReview(
             id,
-            c.courtId,
             msg.sender,
             key,
             input.fileHash,
@@ -440,85 +575,172 @@ contract EvidenceRegistry is AccessControl {
         );
     }
 
-    /// Current holder passes evidence to the lead investigator or an assigned analyst
-    function transferCustody(
-        uint256 id,
-        address newHolder,
-        string calldata reason
-    ) external {
+    /// Admins (multisig) approve evidence after checking it. The case's court is notified.
+    function approveEvidence(uint256 id) external onlyAdmin {
         Evidence storage e = evidences[id];
         require(e.id != 0, "Evidence not found");
-        require(e.status == Status.Active, "Evidence is flagged or revoked");
-        require(
-            e.stage != Stage.SubmittedToCourt,
-            "Already submitted to court"
-        );
-        require(
-            msg.sender == e.currentHolder,
-            "Only current holder can transfer"
-        );
-        require(
-            newHolder != address(0) && newHolder != msg.sender,
-            "Invalid recipient"
-        );
-
+        require(e.review == Review.Pending, "Not pending review");
         bytes32 key = _caseKey(e);
-        Case storage c = cases[key];
-        require(c.status == CaseStatus.Open, "Case is not open");
+        require(cases[key].status == CaseStatus.Open, "Case is not open");
 
-        Stage newStage;
-        if (newHolder == c.leadInvestigator) newStage = Stage.Collected;
-        else if (isAnalyst[key][newHolder]) newStage = Stage.ForensicAnalysis;
-        else revert("Recipient not on this case");
-
-        e.currentHolder = newHolder;
-        e.stage = newStage;
-        history[id].push(
-            CustodyRecord(
-                msg.sender,
-                newHolder,
-                newStage,
-                reason,
-                block.timestamp
-            )
-        );
-        emit CustodyTransferred(
+        e.review = Review.Approved;
+        _log(
             id,
+            Action.Approved,
             msg.sender,
-            newHolder,
-            newStage,
-            reason,
+            e.collector,
+            "Approved by admins"
+        );
+        emit EvidenceApproved(
+            id,
+            cases[key].courtId,
+            e.collector,
+            key,
+            e.fileHash,
             block.timestamp
         );
     }
 
-    /// Current holder submits evidence to the court. Notifies the court.
-    function submitToCourt(uint256 id, string calldata note) external {
+    /// Admins reject evidence. The officer can correct it and register it again.
+    function rejectEvidence(
+        uint256 id,
+        string calldata reason
+    ) external onlyAdmin {
         Evidence storage e = evidences[id];
         require(e.id != 0, "Evidence not found");
-        require(e.status == Status.Active, "Evidence is flagged or revoked");
-        require(e.stage != Stage.SubmittedToCourt, "Already submitted");
-        require(msg.sender == e.currentHolder, "Only current holder");
+        require(e.review == Review.Pending, "Not pending review");
 
-        Case storage c = cases[_caseKey(e)];
-        require(c.status == CaseStatus.Open, "Case is not open");
+        e.review = Review.Rejected;
+        hashToId[e.fileHash] = 0;
+        _log(id, Action.Rejected, msg.sender, e.collector, reason);
+        emit EvidenceRejected(id, e.collector, reason, block.timestamp);
+    }
+
+    // =====================================================
+    // Custody (every step is recorded)
+    // =====================================================
+
+    /// Step 1: the holder offers custody to the lead investigator or an assigned analyst
+    function sendCustody(
+        uint256 id,
+        address to,
+        string calldata reason
+    ) external {
+        Evidence storage e = _movable(id);
+        require(
+            msg.sender == e.currentHolder,
+            "Only current holder can transfer"
+        );
+        require(pendingTo[id] == address(0), "Transfer already pending");
+        require(to != address(0) && to != msg.sender, "Invalid recipient");
+        bytes32 key = _caseKey(e);
+        require(
+            _isParticipant(msg.sender, key),
+            "Sender is no longer on this case"
+        );
+        require(_isParticipant(to, key), "Recipient not on this case");
+
+        pendingTo[id] = to;
+        _log(id, Action.Offered, msg.sender, to, reason);
+        emit CustodyOffered(id, msg.sender, to, reason, block.timestamp);
+    }
+
+    /// Step 2: the recipient accepts, and custody actually moves
+    function acceptCustody(uint256 id) external {
+        Evidence storage e = _movable(id);
+        require(pendingTo[id] == msg.sender, "No transfer pending for you");
+        bytes32 key = _caseKey(e);
+        require(
+            _isParticipant(msg.sender, key),
+            "You are no longer on this case"
+        );
+
+        address from = e.currentHolder;
+        e.currentHolder = msg.sender;
+        e.stage = _isLead(msg.sender, cases[key])
+            ? Stage.Collected
+            : Stage.ForensicAnalysis;
+        pendingTo[id] = address(0);
+        _log(id, Action.Accepted, from, msg.sender, "Custody accepted");
+        emit CustodyTransferred(id, from, msg.sender, e.stage, block.timestamp);
+    }
+
+    function cancelCustodyOffer(uint256 id) external {
+        Evidence storage e = _movable(id);
+        require(msg.sender == e.currentHolder, "Only current holder");
+        require(pendingTo[id] != address(0), "No transfer pending");
+        address to = pendingTo[id];
+        pendingTo[id] = address(0);
+        _log(id, Action.OfferCancelled, msg.sender, to, "Offer cancelled");
+        emit CustodyOfferCancelled(id, msg.sender, block.timestamp);
+    }
+
+    /// Admins (multisig) move evidence away from a holder who is no longer active on the case
+    function forceReassign(
+        uint256 id,
+        address newHolder,
+        string calldata reason
+    ) external onlyAdmin {
+        Evidence storage e = _movable(id);
+        bytes32 key = _caseKey(e);
+        require(
+            !_isParticipant(e.currentHolder, key),
+            "Current holder is still active on the case"
+        );
+        require(_isParticipant(newHolder, key), "Recipient not on this case");
+
+        address from = e.currentHolder;
+        e.currentHolder = newHolder;
+        e.stage = _isLead(newHolder, cases[key])
+            ? Stage.Collected
+            : Stage.ForensicAnalysis;
+        pendingTo[id] = address(0);
+        _log(id, Action.Reassigned, from, newHolder, reason);
+        emit CustodyTransferred(id, from, newHolder, e.stage, block.timestamp);
+    }
+
+    /// The holder formally submits the evidence to the court. The court is notified.
+    function submitToCourt(uint256 id, string calldata note) external {
+        Evidence storage e = _movable(id);
+        require(msg.sender == e.currentHolder, "Only current holder");
+        require(pendingTo[id] == address(0), "Transfer pending");
+        bytes32 key = _caseKey(e);
+        require(_isParticipant(msg.sender, key), "Not on this case");
 
         e.stage = Stage.SubmittedToCourt;
-        history[id].push(
-            CustodyRecord(
-                msg.sender,
-                msg.sender,
-                Stage.SubmittedToCourt,
-                note,
-                block.timestamp
-            )
-        );
+        _log(id, Action.SubmittedToCourt, msg.sender, msg.sender, note);
         emit EvidenceSubmittedToCourt(
             id,
-            c.courtId,
+            cases[key].courtId,
             msg.sender,
             block.timestamp
         );
+    }
+
+    // =====================================================
+    // Forensic reports, audit, flags
+    // =====================================================
+
+    /// An assigned analyst records the hash of their examination report
+    function addAnalysisReport(
+        uint256 id,
+        bytes32 reportHash,
+        string calldata note
+    ) external {
+        Evidence storage e = _viewable(id);
+        require(e.review == Review.Approved, "Evidence not approved");
+        require(
+            _isAnalystOf(msg.sender, _caseKey(e)),
+            "Only an assigned analyst"
+        );
+        require(reportHash != bytes32(0), "Empty hash");
+
+        Report storage r = reports[id].push();
+        r.analyst = msg.sender;
+        r.reportHash = reportHash;
+        r.note = note;
+        r.timestamp = block.timestamp;
+        emit AnalysisReportAdded(id, msg.sender, reportHash, block.timestamp);
     }
 
     /// Verify a hash and log the result on-chain (audit entry)
@@ -538,41 +760,39 @@ contract EvidenceRegistry is AccessControl {
         emit EvidenceAccessed(id, msg.sender, purpose, block.timestamp);
     }
 
-    // ---------- Flag / resolve / revoke ----------
-
-    /// Anyone on the case (including the court) can dispute evidence. It is frozen until resolved.
+    /// Case participants can dispute approved evidence. It is frozen until admins resolve it.
     function flagEvidence(uint256 id, string calldata reason) external {
         Evidence storage e = _viewable(id);
+        require(e.review == Review.Approved, "Evidence not approved");
         require(e.status == Status.Active, "Evidence is not active");
+        require(
+            _isParticipant(msg.sender, _caseKey(e)),
+            "Only case participants can flag"
+        );
         _setStatus(id, Status.Flagged, reason);
     }
 
-    /// Only the case's court clears a flag
-    function resolveFlag(uint256 id, string calldata note) external {
+    /// Only the admin multisig clears a flag
+    function resolveFlag(uint256 id, string calldata note) external onlyAdmin {
         Evidence storage e = evidences[id];
         require(e.id != 0, "Evidence not found");
-        require(
-            _isCourtOf(msg.sender, cases[_caseKey(e)].courtId),
-            "Not this case's court"
-        );
         require(e.status == Status.Flagged, "Evidence is not flagged");
         _setStatus(id, Status.Active, note);
     }
 
-    /// Only the case's court can permanently revoke. The record stays on the chain.
-    function revokeEvidence(uint256 id, string calldata reason) external {
+    /// Only the admin multisig can permanently revoke. The record stays on the chain.
+    function revokeEvidence(
+        uint256 id,
+        string calldata reason
+    ) external onlyAdmin {
         Evidence storage e = evidences[id];
         require(e.id != 0, "Evidence not found");
-        require(
-            _isCourtOf(msg.sender, cases[_caseKey(e)].courtId),
-            "Not this case's court"
-        );
         require(e.status != Status.Revoked, "Already revoked");
         _setStatus(id, Status.Revoked, reason);
     }
 
     // =====================================================
-    // Read functions (restricted to people on the case)
+    // Read functions
     // =====================================================
 
     function verify(uint256 id, bytes32 fileHash) external view returns (bool) {
@@ -581,6 +801,11 @@ contract EvidenceRegistry is AccessControl {
 
     function getEvidence(uint256 id) external view returns (Evidence memory) {
         return _viewable(id);
+    }
+
+    function getEvidenceDocs(uint256 id) external view returns (Docs memory) {
+        _viewable(id);
+        return docs[id];
     }
 
     function getCustodyHistory(
@@ -597,11 +822,23 @@ contract EvidenceRegistry is AccessControl {
         return statusHistory[id];
     }
 
+    function getAnalysisReports(
+        uint256 id
+    ) external view returns (Report[] memory) {
+        _viewable(id);
+        return reports[id];
+    }
+
     function getCase(
         string calldata caseId
     ) external view returns (Case memory) {
         bytes32 key = keccak256(bytes(caseId));
-        require(_canViewCase(msg.sender, key), "Not authorized for this case");
+        require(
+            _canViewCase(msg.sender, key) ||
+                (admins.isOwner(msg.sender) &&
+                    cases[key].status != CaseStatus.None),
+            "Not authorized for this case"
+        );
         return cases[key];
     }
 
@@ -609,19 +846,38 @@ contract EvidenceRegistry is AccessControl {
         string calldata caseId
     ) external view returns (address[] memory) {
         bytes32 key = keccak256(bytes(caseId));
-        require(_canViewCase(msg.sender, key), "Not authorized for this case");
+        require(
+            _canViewCase(msg.sender, key) ||
+                (admins.isOwner(msg.sender) &&
+                    cases[key].status != CaseStatus.None),
+            "Not authorized for this case"
+        );
         return analysts[key];
     }
 
+    /// Evidence of a case that the caller may see (admins see only pending or rejected items)
     function getCaseEvidence(
         string calldata caseId
     ) external view returns (Evidence[] memory) {
         bytes32 key = keccak256(bytes(caseId));
-        require(_canViewCase(msg.sender, key), "Not authorized for this case");
+        require(
+            _canViewCase(msg.sender, key) ||
+                (admins.isOwner(msg.sender) &&
+                    cases[key].status != CaseStatus.None),
+            "Not authorized for this case"
+        );
         uint256[] storage ids = caseEvidence[key];
-        Evidence[] memory list = new Evidence[](ids.length);
+        uint256 n = 0;
         for (uint256 i = 0; i < ids.length; i++) {
-            list[i] = evidences[ids[i]];
+            if (_canSeeEvidence(msg.sender, evidences[ids[i]])) n++;
+        }
+        Evidence[] memory list = new Evidence[](n);
+        uint256 k = 0;
+        for (uint256 i = 0; i < ids.length; i++) {
+            if (_canSeeEvidence(msg.sender, evidences[ids[i]])) {
+                list[k] = evidences[ids[i]];
+                k++;
+            }
         }
         return list;
     }
@@ -643,16 +899,22 @@ contract EvidenceRegistry is AccessControl {
         return list;
     }
 
-    /// IDs of evidence the caller currently holds
+    /// IDs of approved evidence the caller currently holds
     function getMyHeldEvidence() external view returns (uint256[] memory) {
         uint256 n = 0;
         for (uint256 i = 1; i <= count; i++) {
-            if (evidences[i].currentHolder == msg.sender) n++;
+            if (
+                evidences[i].review == Review.Approved &&
+                evidences[i].currentHolder == msg.sender
+            ) n++;
         }
         uint256[] memory ids = new uint256[](n);
         uint256 k = 0;
         for (uint256 i = 1; i <= count; i++) {
-            if (evidences[i].currentHolder == msg.sender) {
+            if (
+                evidences[i].review == Review.Approved &&
+                evidences[i].currentHolder == msg.sender
+            ) {
                 ids[k] = i;
                 k++;
             }
@@ -660,44 +922,41 @@ contract EvidenceRegistry is AccessControl {
         return ids;
     }
 
-    // ---------- Public info (no case data): used by the location dropdown ----------
-
-    /// All locations that have a registered court (fill the location dropdown with this)
-    function getLocations() external view returns (string[] memory) {
-        return locations;
-    }
-
-    /// The court for a selected location (show this under the dropdown)
-    function getCourtForLocation(
-        string calldata location
-    ) external view returns (bytes32 id, string memory name) {
-        id = locationToCourt[keccak256(bytes(location))];
-        name = courtName[id];
-    }
-
-    function getCourts()
-        external
-        view
-        returns (
-            bytes32[] memory ids,
-            string[] memory names,
-            string[] memory locs
-        )
-    {
-        ids = courtIds;
-        names = new string[](courtIds.length);
-        locs = new string[](courtIds.length);
-        for (uint256 i = 0; i < courtIds.length; i++) {
-            names[i] = courtName[courtIds[i]];
-            locs[i] = courtLocation[courtIds[i]];
+    /// Admin review queue: evidence waiting for a decision
+    function getPendingEvidence() external view returns (uint256[] memory) {
+        require(admins.isOwner(msg.sender), "Admins only");
+        uint256 n = 0;
+        for (uint256 i = 1; i <= count; i++) {
+            if (evidences[i].review == Review.Pending) n++;
         }
+        uint256[] memory ids = new uint256[](n);
+        uint256 k = 0;
+        for (uint256 i = 1; i <= count; i++) {
+            if (evidences[i].review == Review.Pending) {
+                ids[k] = i;
+                k++;
+            }
+        }
+        return ids;
     }
 
+    // ---------- Shortcuts used by the backend and frontend ----------
+
+    /// "Admin" for an admin (multisig owner), otherwise the profile role, "Pending", "Suspended" or "None"
     function getUserRole(address a) external view returns (string memory) {
-        if (hasRole(DEFAULT_ADMIN_ROLE, a)) return "Admin";
-        if (hasRole(COURT_ROLE, a)) return "Court Official";
-        if (hasRole(FORENSIC_ROLE, a)) return "Forensic Analyst";
-        if (hasRole(INVESTIGATOR_ROLE, a)) return "Investigator";
-        return "None";
+        if (admins.isOwner(a)) return "Admin";
+        return people.roleName(a);
+    }
+
+    /// The court a court official works for (0 if the address is not an active court official)
+    function officialCourt(address a) external view returns (uint256) {
+        return
+            _hasRole(a, PeopleRegistry.Role.CourtOfficial)
+                ? people.unitOf(a)
+                : 0;
+    }
+
+    function courtName(uint256 courtId) external view returns (string memory) {
+        return people.unitName(courtId);
     }
 }

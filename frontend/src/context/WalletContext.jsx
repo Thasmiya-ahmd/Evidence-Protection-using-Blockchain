@@ -18,7 +18,7 @@ export function WalletProvider({ children }) {
   const [signer, setSigner] = useState(null)
   const [chainMismatch, setChainMismatch] = useState(false)
   const [connecting, setConnecting] = useState(false)
-  const [jwt, setJwt] = useState(sessionStorage.getItem('evidence-jwt') || '')
+  const [jwt, setJwt] = useState(localStorage.getItem('evidence-jwt') || '')
   const [notifications, setNotifications] = useState([])
   const [lastReadBlock, setLastReadBlock] = useState(0)
   const [toast, setToast] = useState(null)
@@ -138,6 +138,13 @@ export function WalletProvider({ children }) {
   }, [notify])
 
   useEffect(() => {
+    api.onUnauthorized(() => {
+      notify('error', 'Session expired. Please sign in again.')
+      disconnect()
+    })
+  }, [disconnect, notify])
+
+  useEffect(() => {
     if (mockMode || !window.ethereum) return undefined
     let disposed = false
     const changed = async (accounts) => {
@@ -174,7 +181,7 @@ export function WalletProvider({ children }) {
       window.ethereum.removeListener('accountsChanged', onAccountsChanged)
       window.ethereum.removeListener('chainChanged', onChainChanged)
     }
-  }, [account, bindWallet, disconnect, notify])
+  }, [account, bindWallet, disconnect, notify, mockMode])
 
   useEffect(() => {
     if (!chain || role !== 'Court Official' || !account || !chain.registry) {

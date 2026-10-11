@@ -21,6 +21,7 @@ export default function CaseDetail() {
   const [description, setDescription] = useState('')
   const [file, setFile] = useState(null)
   const [certificate, setCertificate] = useState(null)
+  const [uploadedFiles, setUploadedFiles] = useState({ file: false, certificate: false })
   const [pendingCertificateLink, setPendingCertificateLink] = useState(null)
   const [progress, setProgress] = useState('')
   const [loading, setLoading] = useState(true)
@@ -57,20 +58,29 @@ export default function CaseDetail() {
     setProgress('Step 1 of 3 · Computing browser SHA-256')
     try {
       const browserHash = await hashBrowserFile(file)
-      setProgress('Step 2 of 3 · Uploading encrypted evidence')
-      const uploaded = await api.uploadEvidenceFile(file, caseId)
-      if (browserHash.toLowerCase() !== uploaded.fileHash.toLowerCase()) {
-        throw new Error('Backend file hash differs from the browser hash. Evidence was not registered.')
-      }
       let certificateHash = `0x${'00'.repeat(32)}`
+      
+      if (!uploadedFiles.file) {
+        setProgress('Step 2 of 3 · Uploading encrypted evidence')
+        const uploaded = await api.uploadEvidenceFile(file)
+        if (browserHash.toLowerCase() !== uploaded.fileHash.toLowerCase()) {
+          throw new Error('Backend file hash differs from the browser hash. Evidence was not registered.')
+        }
+      }
+      
       if (certificate) {
         const browserCertificateHash = await hashBrowserFile(certificate)
-        const uploadedCertificate = await api.uploadEvidenceFile(certificate, caseId, 'certificate')
-        if (browserCertificateHash.toLowerCase() !== uploadedCertificate.fileHash.toLowerCase()) {
-          throw new Error('Backend certificate hash differs from the browser hash.')
+        if (!uploadedFiles.certificate) {
+          const uploadedCertificate = await api.uploadEvidenceFile(certificate, 'certificate')
+          if (browserCertificateHash.toLowerCase() !== uploadedCertificate.fileHash.toLowerCase()) {
+            throw new Error('Backend certificate hash differs from the browser hash.')
+          }
         }
-        certificateHash = uploadedCertificate.fileHash
+        certificateHash = browserCertificateHash
       }
+      
+      setUploadedFiles({ file: true, certificate: Boolean(certificate) })
+
       setProgress('Step 3 of 3 · Confirm registerEvidence in MetaMask')
       const tx = await chain.registerEvidence({
         caseId,
@@ -122,7 +132,11 @@ export default function CaseDetail() {
       await refresh()
     } catch (error) {
       setProgress('')
-      notify('error', errorMessage(error))
+      if (uploadedFiles.file || uploadedFiles.certificate) {
+        notify('error', `Files are uploaded securely but not yet registered. You can try submitting again without re-uploading. Error: ${errorMessage(error)}`)
+      } else {
+        notify('error', errorMessage(error))
+      }
     }
   }
 
@@ -157,7 +171,7 @@ export default function CaseDetail() {
           <div><span>Court</span><strong>{courtName}</strong></div>
           <div><span>Opened</span><strong>{formatTimestamp(record.createdAt)}</strong></div>
         </div>
-        {role === 'Court Official' && record.status === 'Open' && <CourtDecisions caseId={caseId} chain={chain} refresh={refresh} />}
+        {role === 'Court Official' && <p className="form-help">Court access is read-only. Case decisions require the admin multisig.</p>}
       </section>
 
       <div className="case-detail-grid">
@@ -208,8 +222,8 @@ export default function CaseDetail() {
             </div>
           )}
           <form className="evidence-form" onSubmit={uploadAndRegister}>
-            <label className="wide-field">Evidence file<input type="file" required onChange={(event) => setFile(event.target.files?.[0] || null)} /></label>
-            <label className="wide-field">Electronic-evidence certificate (optional)<input type="file" onChange={(event) => setCertificate(event.target.files?.[0] || null)} /></label>
+            <label className="wide-field">Evidence file<input type="file" required onChange={(event) => { setFile(event.target.files?.[0] || null); setUploadedFiles({ file: false, certificate: false }) }} /></label>
+            <label className="wide-field">Electronic-evidence certificate (optional)<input type="file" onChange={(event) => { setCertificate(event.target.files?.[0] || null); setUploadedFiles(prev => ({ ...prev, certificate: false })) }} /></label>
             <label>Generic description<input value={description} onChange={(event) => setDescription(event.target.value)} maxLength={256} required placeholder="Seized laptop" /></label>
             <label>Short collection location<input value={location} onChange={(event) => setLocation(event.target.value)} maxLength={128} required placeholder="Records office" /></label>
             <label>Collection method<input value={method} onChange={(event) => setMethod(event.target.value)} maxLength={128} required placeholder="Seized" /></label>
@@ -218,17 +232,6 @@ export default function CaseDetail() {
           {progress && <div className="progress-step">{progress}</div>}
         </section>
       )}
-    </div>
-  )
-}
-
-function CourtDecisions({ caseId, chain, refresh }) {
-  const [note, setNote] = useState('')
-  return (
-    <div className="case-action-bar">
-      <label>Decision note<input value={note} onChange={(event) => setNote(event.target.value)} maxLength={512} placeholder="Decision note" /></label>
-      <TxButton disabled={!note.trim()} onClick={() => chain.rejectCase(caseId, note.trim())} onSuccess={refresh} className="button button-danger">Reject case</TxButton>
-      <TxButton disabled={!note.trim()} onClick={() => chain.closeCase(caseId, note.trim())} onSuccess={refresh} className="button button-secondary">Close case</TxButton>
     </div>
   )
 }

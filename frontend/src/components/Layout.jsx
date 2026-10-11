@@ -20,6 +20,7 @@ export default function Layout() {
 
   return (
     <div className="app-shell">
+      {mockMode && <div style={{ background: '#f59e0b', color: '#fff', textAlign: 'center', padding: '4px', fontSize: '0.8rem', fontWeight: 'bold' }}>MOCK MODE (OFFLINE DEMO)</div>}
       <header className="topbar">
         <Link className="brand" to="/dashboard">
           <span className="brand-mark">EP</span>

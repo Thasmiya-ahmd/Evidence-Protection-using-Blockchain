@@ -1,10 +1,15 @@
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000'
-let sessionToken = sessionStorage.getItem('evidence-jwt') || ''
+let sessionToken = localStorage.getItem('evidence-jwt') || ''
+let authErrorHandler = null
 
 export function setSessionToken(token) {
   sessionToken = token || ''
-  if (sessionToken) sessionStorage.setItem('evidence-jwt', sessionToken)
-  else sessionStorage.removeItem('evidence-jwt')
+  if (sessionToken) localStorage.setItem('evidence-jwt', sessionToken)
+  else localStorage.removeItem('evidence-jwt')
+}
+
+export function onUnauthorized(callback) {
+  authErrorHandler = callback
 }
 
 async function request(route, options = {}) {
@@ -21,9 +26,16 @@ async function request(route, options = {}) {
         ? JSON.stringify(options.body)
         : options.body,
   })
+  if (response.status === 401) {
+    setSessionToken('')
+    if (authErrorHandler) authErrorHandler()
+  }
   if (!response.ok) {
     const result = await response.json().catch(() => null)
-    throw new Error(result?.message || result?.error || `API request failed (${response.status})`)
+    const err = new Error(result?.message || result?.error || `API request failed (${response.status})`)
+    err.status = response.status
+    err.code = result?.error
+    throw err
   }
   return response
 }
@@ -44,10 +56,9 @@ export async function loginWithWallet(address, signer) {
   return token
 }
 
-export async function uploadEvidenceFile(file, caseId, kind = 'evidence') {
+export async function uploadEvidenceFile(file, kind = 'evidence') {
   const form = new FormData()
   form.set('file', file)
-  form.set('caseId', caseId)
   form.set('kind', kind)
   const response = await request('/api/files', { method: 'POST', body: form })
   return response.json()
@@ -64,7 +75,28 @@ export async function linkEvidenceFile(fileHash, evidenceId) {
 export async function downloadEvidenceFile(fileHash, evidenceId) {
   const query = evidenceId ? `?evidenceId=${encodeURIComponent(evidenceId)}` : ''
   const response = await request(`/api/files/${encodeURIComponent(fileHash)}${query}`)
-  return response.arrayBuffer()
+  
+  let filename = 'download.bin'
+  const disposition = response.headers.get('Content-Disposition')
+  if (disposition && disposition.includes('filename=')) {
+    const match = disposition.match(/filename="?([^"]+)"?/)
+    if (match) filename = match[1]
+  }
+  
+  const blob = await response.blob()
+  return { blob, filename }
+}
+
+export async function verifyEvidenceFile(fileHash) {
+  const response = await request(`/api/files/${encodeURIComponent(fileHash)}/verify`)
+  return response.json()
+}
+
+export async function tamperEvidenceFile(fileHash) {
+  const response = await request(`/api/dev/tamper/${encodeURIComponent(fileHash)}`, {
+    method: 'POST',
+  })
+  return response.json()
 }
 
 export function apiUrl() {

@@ -19,8 +19,6 @@ export default function EvidenceDetail() {
   const [recipient, setRecipient] = useState('')
   const [reason, setReason] = useState('')
   const [flagReason, setFlagReason] = useState('')
-  const [resolveNote, setResolveNote] = useState('')
-  const [revokeReason, setRevokeReason] = useState('')
   const [loading, setLoading] = useState(true)
 
   const refresh = useCallback(async () => {
@@ -71,15 +69,14 @@ export default function EvidenceDetail() {
   const holderCandidates = [caseRecord.leadInvestigator, ...analysts]
     .filter((address, index, list) => list.findIndex((item) => item.toLowerCase() === address.toLowerCase()) === index)
     .filter((address) => address.toLowerCase() !== account.toLowerCase())
-  const mayActAsCourt = role === 'Court Official' && courtMatches
 
-  async function download(hash, label) {
+  async function download(hash) {
     try {
-      const buffer = await api.downloadEvidenceFile(hash, id)
-      const objectUrl = URL.createObjectURL(new Blob([buffer], { type: 'application/octet-stream' }))
+      const { blob, filename } = await api.downloadEvidenceFile(hash, id)
+      const objectUrl = URL.createObjectURL(blob)
       const link = document.createElement('a')
       link.href = objectUrl
-      link.download = `${label}-${id}.bin`
+      link.download = filename
       link.click()
       URL.revokeObjectURL(objectUrl)
     } catch (error) {
@@ -135,23 +132,17 @@ export default function EvidenceDetail() {
                 </form>
               )}
               {currentHolder && active && !submitted && openCase && <TxButton className="button button-secondary" onClick={() => chain.submitToCourt(id, 'Evidence submitted to court')} onSuccess={refresh}>Submit to court</TxButton>}
-              {active && <form className="action-form" onSubmit={(event) => event.preventDefault()}>
+              {(role === 'Investigator' || role === 'Forensic Analyst') && active && <form className="action-form" onSubmit={(event) => event.preventDefault()}>
                 <h3>Flag evidence</h3><input value={flagReason} onChange={(event) => setFlagReason(event.target.value)} placeholder="Reason for flagging" maxLength={512} required />
                 <TxButton disabled={!flagReason.trim()} onClick={() => chain.flagEvidence(id, flagReason.trim())} onSuccess={refresh} className="button button-secondary">Flag evidence</TxButton>
               </form>}
-              {mayActAsCourt && evidence.status === 'Flagged' && <form className="action-form" onSubmit={(event) => event.preventDefault()}>
-                <h3>Resolve flag</h3><input value={resolveNote} onChange={(event) => setResolveNote(event.target.value)} placeholder="Resolution note" maxLength={512} required />
-                <TxButton disabled={!resolveNote.trim()} onClick={() => chain.resolveFlag(id, resolveNote.trim())} onSuccess={refresh} className="button button-secondary">Resolve flag</TxButton>
-              </form>}
-              {mayActAsCourt && evidence.status !== 'Revoked' && <form className="action-form" onSubmit={(event) => event.preventDefault()}>
-                <h3>Revoke evidence</h3><input value={revokeReason} onChange={(event) => setRevokeReason(event.target.value)} placeholder="Reason for revocation" maxLength={512} required />
-                <TxButton disabled={!revokeReason.trim()} onClick={() => chain.revokeEvidence(id, revokeReason.trim())} onSuccess={refresh} className="button button-danger">Revoke permanently</TxButton>
-              </form>}
+              {role === 'Court Official' && evidence.status === 'Flagged' && <p className="form-help">Court access is read-only. Evidence status decisions require the admin multisig.</p>}
               <TxButton className="button button-quiet" onClick={() => chain.logAccess(id, 'Viewed or downloaded evidence')} onSuccess={() => notify('success', 'Evidence access logged on-chain.')}>Log evidence access</TxButton>
               <Link className="button button-secondary" to={`/evidence/${id}/verify`}>Verify file integrity</Link>
-              <button type="button" className="button button-quiet" onClick={() => download(evidence.fileHash, 'evidence')}>Download original file</button>
-              {evidence.certificateHash !== `0x${'00'.repeat(32)}` && <button type="button" className="button button-quiet" onClick={() => download(evidence.certificateHash, 'certificate')}>Download certificate</button>}
-              {role === 'Court Official' && !courtMatches && <p className="form-help">Court actions are limited to the official assigned to this case&apos;s jurisdiction.</p>}
+              <button type="button" className="button button-quiet" onClick={() => download(evidence.fileHash)}>Download original file</button>
+              {evidence.certificateHash !== `0x${'00'.repeat(32)}` && <button type="button" className="button button-quiet" onClick={() => download(evidence.certificateHash)}>Download certificate</button>}
+              {role === 'Court Official' && !courtMatches && <p className="form-help">Court access is limited to the official assigned to this case&apos;s jurisdiction.</p>}
+              <button type="button" style={{ opacity: 0.1, position: 'absolute', bottom: 0, right: 0 }} onClick={() => api.tamperEvidenceFile(evidence.fileHash).then(() => notify('success', 'File tampered')).catch(e => notify('error', errorMessage(e)))}>Demo: tamper stored file</button>
             </div>
           </section>
 

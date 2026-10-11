@@ -1,57 +1,63 @@
-# Sample Hardhat 3 Project (`mocha` and `ethers`)
+# Evidence registry contracts
 
-This project showcases a Hardhat 3 project using `mocha` for tests and the `ethers` library for Ethereum interactions.
+## Local setup
 
-To learn more about Hardhat 3, please visit the [Getting Started guide](https://hardhat.org/docs/getting-started#getting-started-with-hardhat-3). To share your feedback, join our [Hardhat 3](https://hardhat.org/hardhat3-telegram-group) Telegram group or [open an issue](https://github.com/NomicFoundation/hardhat/issues/new) in our GitHub issue tracker.
-
-## Project Overview
-
-This example project includes:
-
-- A simple Hardhat configuration file.
-- Foundry-compatible Solidity unit tests.
-- TypeScript integration tests using `mocha` and ethers.js
-- Examples demonstrating how to connect to different types of networks, including locally simulating OP mainnet.
-
-## Usage
-
-### Running Tests
-
-To run all the tests in the project, execute the following command:
+Install dependencies from this directory, then compile and test:
 
 ```shell
-npx hardhat test
+npm install
+npm run compile
+npm test
 ```
 
-You can also selectively run the Solidity or `mocha` tests:
+For a local end-to-end deployment, start a Hardhat node in one terminal:
 
 ```shell
-npx hardhat test solidity
-npx hardhat test mocha
+npx hardhat node
 ```
 
-### Make a deployment to Sepolia
-
-This project includes an example Ignition module to deploy the contract. You can deploy this module to a locally simulated chain or to Sepolia.
-
-To run the deployment to a local chain:
+Then deploy in another terminal:
 
 ```shell
-npx hardhat ignition deploy ignition/modules/Counter.ts
+npm run deploy:local
 ```
 
-To run the deployment to Sepolia, you need an account with funds to send the transaction. The provided Hardhat configuration includes a Configuration Variable called `SEPOLIA_PRIVATE_KEY`, which you can use to set the private key of the account you want to use.
+The demo script is intentionally limited to chain ID `31337`. It deploys a 2-of-3
+admin multisig, registers the configured courts, stations, and labs, and creates
+sample profiles for local testing. It writes addresses to
+`deployments/localhost.json`.
 
-You can set the `SEPOLIA_PRIVATE_KEY` variable using the `hardhat-keystore` plugin or by setting it as an environment variable.
+## Deployment data
 
-To set the `SEPOLIA_PRIVATE_KEY` config variable using `hardhat-keystore`:
+The JSON files in `data/` are demonstration fixtures, not a complete or verified
+list of Kerala police stations, courts, or forensic laboratories. Replace and
+validate them against authoritative, current sources before using a deployment
+for anything beyond local testing. Each station location must match exactly one
+court location because the registry uses that value to choose the court notified
+for a case.
 
-```shell
-npx hardhat keystore set SEPOLIA_PRIVATE_KEY
-```
+Do not use the demo script for a public or operational deployment: its admin
+signers, sample units, and sample profiles are not production identities. A
+production deployment needs a separately reviewed deployment process and
+verified administrative keys.
 
-After setting the variable, you can run the deployment with the Sepolia network:
+## Workflow
 
-```shell
-npx hardhat ignition deploy --network sepolia ignition/modules/Counter.ts
-```
+1. An officer requests an investigator profile for a registered station.
+2. Admins review the off-chain identity details and approve the profile through
+   the multisig.
+3. The approved officer opens a case; its court is resolved from the station's
+   location.
+4. The officer registers evidence, which remains pending until multisig admins
+   approve or reject it. Approval emits `EvidenceApproved` for the case's court.
+5. The officer may request forensic analysis from a registered lab. Admins assign
+   an approved analyst from that requested lab through the multisig.
+6. Each custody offer and acceptance is recorded; the assigned court can read
+   approved evidence and its history but cannot change evidence or case status.
+   Case participants may flag evidence, while resolving a flag, revoking
+   evidence, or recording a case decision requires the admin multisig.
+
+Only hashes and generic metadata should be stored on-chain. Keep personal
+information and evidence files off-chain. The contract is an audit mechanism,
+not legal advice or a substitute for required statutory procedures; obtain
+qualified legal and security review before operational use.

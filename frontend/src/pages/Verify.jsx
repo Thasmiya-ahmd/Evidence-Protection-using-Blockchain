@@ -18,6 +18,8 @@ export default function Verify() {
   const [browserHash, setBrowserHash] = useState('')
   const [backendHash, setBackendHash] = useState('')
   const [chainMatch, setChainMatch] = useState(null)
+  const [readable, setReadable] = useState(true)
+  const [backendMessage, setBackendMessage] = useState('')
   const [checking, setChecking] = useState(false)
   const [loading, setLoading] = useState(true)
 
@@ -34,14 +36,17 @@ export default function Verify() {
     setBrowserHash('')
     setBackendHash('')
     setChainMatch(null)
+    setReadable(true)
+    setBackendMessage('')
     try {
       const local = await sha256(await selectedFile.arrayBuffer())
-      const storedBytes = await api.downloadEvidenceFile(evidence.fileHash, id)
-      const fromBackend = await sha256(storedBytes)
+      const verifyResult = await api.verifyEvidenceFile(evidence.fileHash)
       const onChain = await chain.verify(id, local)
       setBrowserHash(local)
-      setBackendHash(fromBackend)
+      setBackendHash(verifyResult.recomputedHash || 'CORRUPTED')
       setChainMatch(Boolean(onChain))
+      setReadable(verifyResult.readable)
+      setBackendMessage(verifyResult.message || '')
     } catch (error) {
       notify('error', errorMessage(error))
     } finally {
@@ -51,6 +56,7 @@ export default function Verify() {
 
   const intact =
     Boolean(browserHash) &&
+    readable &&
     browserHash.toLowerCase() === backendHash.toLowerCase() &&
     browserHash.toLowerCase() === evidence?.fileHash.toLowerCase() &&
     chainMatch === true
@@ -72,7 +78,7 @@ export default function Verify() {
             <div className={`verification-result ${intact ? 'intact' : 'tampered'}`}>
               <span>{intact ? '✓' : '!'}</span>
               <strong>{intact ? 'INTACT' : 'TAMPERING DETECTED'}</strong>
-              <small>{intact ? 'Both copies match the evidence hash recorded on-chain.' : 'One or more hashes do not match the registered evidence.'}</small>
+              <small>{intact ? 'Both copies match the evidence hash recorded on-chain.' : (!readable && backendMessage) ? backendMessage : 'One or more hashes do not match the registered evidence.'}</small>
             </div>
             <div className="verification-hashes">
               <HashResult label="Selected file (browser)" hash={browserHash} />
