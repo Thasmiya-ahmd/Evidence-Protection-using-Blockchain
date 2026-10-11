@@ -12,9 +12,17 @@ async function start() {
   const chain = createChain({
     rpcUrl: config.RPC_URL,
     registryAddress: config.registryAddress,
+    multisigAddress: config.multisigAddress,
+    peopleAddress: config.peopleAddress,
   })
   try {
-    await assertChainReady(chain, config.CHAIN_ID, config.registryAddress)
+    await assertChainReady(
+      chain,
+      config.CHAIN_ID,
+      config.registryAddress,
+      config.multisigAddress,
+      config.peopleAddress,
+    )
   } catch (error) {
     chain.provider.destroy()
     db.close()
@@ -24,6 +32,8 @@ async function start() {
   const server = app.listen(config.PORT, () => {
     console.log(`Evidence Chain API listening on port ${config.PORT}`)
     console.log(`Read-only registry: ${config.registryAddress}`)
+    console.log(`Read-only multisig: ${config.multisigAddress}`)
+    console.log(`Read-only people:   ${config.peopleAddress}`)
     console.log(`Configured chain ID: ${config.CHAIN_ID}`)
   })
   let notifier

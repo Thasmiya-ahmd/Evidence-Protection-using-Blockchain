@@ -7,7 +7,9 @@
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
     "smoke": "node scripts/smoke-test.mjs",
+    "abi": "node scripts/copy-abi.mjs",
     "copy:abi": "node scripts/copy-abi.mjs",
+    "addresses": "node scripts/print-addresses.mjs",
     "test": "node --test test/backend.test.js"
   },
   "engines": {

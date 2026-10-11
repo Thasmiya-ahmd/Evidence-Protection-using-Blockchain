@@ -7,15 +7,27 @@ export function createNotificationsRouter({ db, chain }) {
 
   router.put('/me/email', async (request, response) => {
     const email = parse(emailSchema, request.body?.email)
-    const role = await chain.getRole(request.auth.address)
-    if (role !== 'Court Official') throw forbidden('Only court officials can register an email address')
-    let courtId
-    try {
-      courtId = String(await chain.registry.officialCourt(request.auth.address)).toLowerCase()
-    } catch {
-      throw unavailable('Could not look up the official court on blockchain')
+    const role = request.auth.role
+
+    if (role !== 'Court Official' && role !== 'Admin') {
+      throw forbidden('Only court officials and admins can register an email address')
     }
-    if (/^0x0{64}$/.test(courtId)) throw forbidden('This wallet is not assigned to a court')
+
+    let courtId = '0'
+    if (role === 'Court Official') {
+      try {
+        const id = await chain.registry.officialCourt(request.auth.address)
+        courtId = id.toString()
+      } catch {
+        throw unavailable('Could not look up the official court on blockchain')
+      }
+      if (courtId === '0') {
+        throw forbidden('This wallet is not assigned to an active court')
+      }
+    } else if (role === 'Admin') {
+      courtId = 'admin'
+    }
+
     db.prepare(`
       INSERT INTO court_contacts(address, email, court_id, updated_at)
       VALUES (?, ?, ?, ?)
@@ -24,19 +36,40 @@ export function createNotificationsRouter({ db, chain }) {
         court_id = excluded.court_id,
         updated_at = excluded.updated_at
     `).run(request.auth.address.toLowerCase(), email, courtId, new Date().toISOString())
+
     response.json({ email, courtId })
   })
 
   router.get('/notifications', async (request, response) => {
-    const role = await chain.getRole(request.auth.address)
-    if (role !== 'Court Official') throw forbidden('Only court officials can view notifications')
-    let courtId
+    const role = request.auth.role
+
+    if (role !== 'Court Official' && role !== 'Admin') {
+      throw forbidden('Only court officials and admins can view notifications')
+    }
+
+    if (role === 'Admin') {
+      const notifications = db.prepare(`
+        SELECT type, reference, block_number AS blockNumber, tx_hash AS txHash, created_at AS createdAt
+        FROM notifications
+        WHERE audience = 'admin' OR court_id = 'admin'
+        ORDER BY block_number DESC, log_index DESC
+        LIMIT 200
+      `).all()
+      return response.json({ notifications })
+    }
+
+    // Court Official
+    let courtId = '0'
     try {
-      courtId = String(await chain.registry.officialCourt(request.auth.address)).toLowerCase()
+      const id = await chain.registry.officialCourt(request.auth.address)
+      courtId = id.toString()
     } catch {
       throw unavailable('Could not look up the official court on blockchain')
     }
-    if (/^0x0{64}$/.test(courtId)) throw forbidden('This wallet is not assigned to a court')
+    if (courtId === '0') {
+      throw forbidden('This wallet is not assigned to an active court')
+    }
+
     const notifications = db.prepare(`
       SELECT type, reference, block_number AS blockNumber, tx_hash AS txHash, created_at AS createdAt
       FROM notifications
@@ -44,7 +77,9 @@ export function createNotificationsRouter({ db, chain }) {
       ORDER BY block_number DESC, log_index DESC
       LIMIT 200
     `).all(courtId)
+
     response.json({ notifications })
   })
+
   return router
 }

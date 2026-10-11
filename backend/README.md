@@ -8,9 +8,9 @@ and never stores wallet signing keys.
 ## Requirements
 
 - Node.js 20 or newer
-- The local Hardhat chain and deployed `EvidenceRegistry` contract
-- The project contract artifact at
-  `../blockchain/artifacts/contracts/EvidenceRegistry.sol/EvidenceRegistry.json`
+- The local Hardhat chain and deployed `EvidenceRegistry`, `PeopleRegistry`,
+  and `AdminMultisig` contracts
+- The three compiled artifacts under `../blockchain/artifacts/contracts/`
 
 ## Install and configure
 
@@ -33,18 +33,23 @@ node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 
 Use the first 64-character hex value for `MASTER_KEY` and the second for
 `JWT_SECRET`. The example values are only format-valid examples; replace both.
-Set `REGISTRY_ADDRESS` to the deployed contract address. The backend validates
-the environment at startup, then checks that the RPC is reachable, the chain ID
-matches, and contract bytecode exists at that address.
+Set `REGISTRY_ADDRESS`, `MULTISIG_ADDRESS`, and `PEOPLE_ADDRESS` to the
+deployed contract addresses. The backend validates the environment at startup,
+then checks that the RPC is reachable, the chain ID matches, and contract
+bytecode exists at all three addresses.
 
-After recompiling the contract, refresh its ABI:
+After compiling or deploying the contracts, refresh all three ABIs:
 
 ```powershell
-npm run copy:abi
+npm run abi
 ```
 
-This copies the `abi` field from the Hardhat artifact into
-`src/abi/EvidenceRegistry.json`.
+This copies each Hardhat artifact ABI into `src/abi/`. After local deployment,
+print the addresses to copy into `backend/.env` with:
+
+```powershell
+npm run addresses
+```
 
 ## Run order
 
@@ -60,9 +65,12 @@ This copies the `abi` field from the Hardhat artifact into
    ```powershell
    cd ..\blockchain
    npx hardhat run scripts/deploy.js --network localhost
+   cd ..\backend
+   npm run abi
+   npm run addresses
    ```
 
-3. Put the deployed registry address in `backend/.env`, then start the API:
+3. Put the three printed addresses in `backend/.env`, then start the API:
 
    ```powershell
    cd ..\backend
@@ -114,12 +122,31 @@ Invoke-RestMethod http://localhost:5000/api/auth/me `
 ```
 
 The nonce is 32 random bytes, expires after five minutes, and can be consumed
-only once. Login returns the current on-chain role.
+only once. Login and every authenticated request use the current on-chain role,
+so removed or suspended access takes effect without waiting for token expiry.
+
+### Units and profiles
+
+`GET /api/units` is public and returns a JSON array of units. Use
+`?type=station|lab|court` and optionally `&location=<location>`.
+`GET /api/units/locations` returns distinct court locations as a JSON array.
+
+An applicant may upload an optional identity file as `kind=profile_doc`, then
+submit `POST /api/profile`. Profile details are encrypted off-chain; the chain
+stores their hash plus the role, unit, and status needed for authorization.
+Admins review the queue at
+`GET /api/admin/profiles/pending` and inspect a profile at
+`GET /api/admin/profiles/:address`. Applicants can read their own profile at
+`GET /api/profile/me` and delete off-chain details while the on-chain status is
+`None` or `Rejected` using `DELETE /api/profile/me`. The applicant and admins
+still submit/approve transactions from their wallets; the backend never signs.
 
 ### Upload a file
 
-Uploads require the current `Investigator` role. `kind` can be `evidence` or
-`certificate`; it defaults to `evidence`.
+Upload permissions depend on `kind`: investigators may upload `evidence`,
+`seizure_memo`, `recording`, and `certificate`; forensic analysts may upload
+`report`; wallets with role `None` may upload `profile_doc`. The default kind
+is `evidence`.
 
 ```powershell
 curl.exe -X POST http://localhost:5000/api/files `
@@ -130,10 +157,10 @@ curl.exe -X POST http://localhost:5000/api/files `
 The response has `fileHash`, `size`, sanitized `name`, and `kind`. If that hash
 already exists, only the original uploader can reuse the file record.
 
-### Link registered evidence or certificate
+### Link registered evidence or documents
 
 After registering the hash on-chain, the uploading wallet links the hash to the
-evidence record. Certificate links are required for certificate authorization.
+evidence record.
 
 ```powershell
 $fileHash = '0x' + ('a' * 64)
@@ -143,7 +170,7 @@ Invoke-RestMethod "http://localhost:5000/api/files/$fileHash/link" `
 ```
 
 The backend confirms on-chain, as the authenticated user, that the evidence
-record contains the file or certificate hash before storing the link.
+record contains the hash for that document kind before storing the link.
 
 ### Verify and download
 
@@ -154,17 +181,21 @@ Invoke-WebRequest "http://localhost:5000/api/files/$fileHash" `
   -Headers @{ Authorization = "Bearer $token" } -OutFile '.\downloaded-evidence.bin'
 ```
 
-An unregistered file is available only to its uploader. Once registered or
-linked, access is checked through `getEvidence.staticCall` with the authenticated
-address as `from`, preserving the contract's lead-investigator/assigned-analyst/
-court-official permissions. Admin wallets are denied. Tampered encrypted data
-returns a successful verify response with `readable: false`; downloads return
-HTTP 409 with `INTEGRITY_FAILURE`.
+An unregistered file is available only to its uploader (profile documents are
+available to their uploader and admins). Registered evidence access is checked
+through `getEvidence.staticCall` with the authenticated address as `from`:
+admins can review pending or rejected evidence; approved evidence is limited to
+its lead investigator, assigned active analyst, and the court official for its
+location. Courts are read-only. Each admin file review is recorded in the
+access log. Tampered encrypted data returns a successful verify response with
+`readable: false`; downloads return HTTP 409 with `INTEGRITY_FAILURE`.
 
 ### Court email and notifications
 
-When `NOTIFY_ENABLED=true`, these endpoints are accessible only to a current
-Court Official assigned to a court:
+When `NOTIFY_ENABLED=true`, these endpoints are accessible to current court
+officials assigned to a court and current admins. Court officials receive
+notifications for their court; admins receive profile and evidence-review
+notifications.
 
 ```powershell
 Invoke-RestMethod http://localhost:5000/api/me/email `
@@ -193,21 +224,30 @@ reports corruption.
 
 ## Smoke test
 
-For a local Hardhat deployment, set `TEST_KEY_INVESTIGATOR` and `TEST_KEY_ADMIN`
-to the corresponding local-only wallet keys in the current PowerShell process.
-These variables are used only by the smoke script, never by the server:
+For a local Hardhat deployment, set the corresponding local-only wallet keys
+in the current PowerShell process. The smoke script requires
+`TEST_KEY_ADMIN`, `TEST_KEY_ADMIN2`, `TEST_KEY_INVESTIGATOR`, `TEST_KEY_ANALYST`,
+`TEST_KEY_COURT_TVM`, `TEST_KEY_COURT_EKM`, `TEST_KEY_INVESTIGATOR_OTHER`, and
+`TEST_KEY_OUTSIDER`. It contains no default private keys; these variables are
+used only by the smoke script, never by the server:
 
 ```powershell
-$env:TEST_KEY_INVESTIGATOR = 'local-investigator-test-key'
-$env:TEST_KEY_ADMIN = 'local-admin-test-key'
+$env:TEST_KEY_ADMIN = '<local-admin-key>'
+$env:TEST_KEY_ADMIN2 = '<second-local-admin-key>'
+$env:TEST_KEY_INVESTIGATOR = '<local-investigator-key>'
+$env:TEST_KEY_ANALYST = '<local-analyst-key>'
+$env:TEST_KEY_COURT_TVM = '<local-tvm-court-key>'
+$env:TEST_KEY_COURT_EKM = '<local-ekm-court-key>'
+$env:TEST_KEY_INVESTIGATOR_OTHER = '<other-station-investigator-key>'
+$env:TEST_KEY_OUTSIDER = '<unapproved-wallet-key>'
 npm run smoke
 ```
 
-The script logs in both wallets, uploads, verifies and downloads as the
-investigator, and confirms that the admin is denied. With `DEMO_MODE=true`, it
-also tampers with the uploaded file and confirms integrity failure; set
-`DEMO_MODE=true` in the backend `.env` before starting the server and in the
-smoke-test shell. Do not use local development wallet keys on a public network.
+If a required key or contract address is missing, smoke steps are reported as
+`SKIPPED`; no key is printed. The script exercises profile review, pending and
+approved evidence access, analyst assignment and reports, custody transfer,
+analyst removal, and (when `DEMO_MODE=true`) tamper detection. Do not use local
+development wallet keys on a public network.
 
 ## Data protection design
 

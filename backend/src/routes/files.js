@@ -5,9 +5,12 @@ import { Router } from 'express'
 import multer from 'multer'
 import { rateLimit } from 'express-rate-limit'
 import { z } from 'zod'
+import { getAddress } from 'ethers'
 import { decrypt, encrypt, sha256 } from '../crypto.js'
 import { writeAccessLog } from '../db.js'
 import {
+  AppError,
+  badRequest,
   conflict,
   forbidden,
   notFound,
@@ -20,12 +23,23 @@ import {
   sanitizeFilename,
 } from '../utils/validate.js'
 
+async function resolveUserRole(chain, address) {
+  if (typeof chain.resolveUserRole === 'function') {
+    const info = await chain.resolveUserRole(address)
+    return info.role
+  }
+  return chain.getRole(address)
+}
+
+const ALLOWED_KINDS = ['evidence', 'seizure_memo', 'recording', 'certificate', 'report', 'profile_doc']
+
 export function createFilesRouter({ db, chain, config }) {
   const router = Router()
   const upload = multer({
     storage: multer.memoryStorage(),
     limits: { fileSize: config.MAX_FILE_MB * 1024 * 1024, files: 1, fields: 2 },
   })
+
   const uploadLimiter = rateLimit({
     windowMs: 60_000,
     limit: 20,
@@ -45,75 +59,104 @@ export function createFilesRouter({ db, chain, config }) {
       })
     },
   })
+
   const getFile = db.prepare('SELECT * FROM files WHERE file_hash = ?')
-  const getLink = db.prepare('SELECT evidence_id FROM file_links WHERE file_hash = ?')
-  const requireInvestigator = async (request, _response, next) => {
-    try {
-      const role = await chain.getRole(request.auth.address)
-      request.auth.role = role
-      if (role !== 'Investigator') {
-        writeAccessLog(db, {
-          address: request.auth.address,
-          action: 'upload',
-          fileHash: null,
-          ip: request.ip,
-        })
-        throw forbidden('Your current wallet role cannot perform this action')
-      }
-      next()
-    } catch (error) {
-      next(error)
-    }
-  }
 
   router.post(
     '/',
     uploadLimiter,
-    requireInvestigator,
     upload.single('file'),
-    (request, _response, next) => {
-      const fileHash = request.file ? sha256(request.file.buffer).toLowerCase() : null
-      request.uploadFileHash = fileHash
-      writeAccessLog(db, {
-        address: request.auth.address,
-        action: 'upload',
-        fileHash,
-        ip: request.ip,
-      })
-      next()
+    async (request, _response, next) => {
+      try {
+        const role = await resolveUserRole(chain, request.auth.address)
+        request.auth.role = role
+
+        const kind = parse(
+          z.enum(ALLOWED_KINDS),
+          request.body?.kind === undefined ? 'evidence' : request.body.kind,
+        )
+        request.uploadKind = kind
+
+        // Upload permissions check:
+        // evidence, seizure_memo, recording, certificate -> role Investigator only
+        // report -> role Forensic Analyst only
+        // profile_doc -> role None only
+        if (['evidence', 'seizure_memo', 'recording', 'certificate'].includes(kind)) {
+          if (role !== 'Investigator') {
+            writeAccessLog(db, {
+              address: request.auth.address,
+              action: 'upload',
+              fileHash: null,
+              ip: request.ip,
+            })
+            throw forbidden('Only investigators can upload evidence files')
+          }
+        } else if (kind === 'report') {
+          if (role !== 'Forensic Analyst') {
+            writeAccessLog(db, {
+              address: request.auth.address,
+              action: 'upload',
+              fileHash: null,
+              ip: request.ip,
+            })
+            throw forbidden('Only forensic analysts can upload reports')
+          }
+        } else if (kind === 'profile_doc') {
+          if (role !== 'None') {
+            writeAccessLog(db, {
+              address: request.auth.address,
+              action: 'upload',
+              fileHash: null,
+              ip: request.ip,
+            })
+            throw forbidden('Only applicants without an active profile can upload profile documents')
+          }
+        }
+
+        const fileHash = request.file ? sha256(request.file.buffer).toLowerCase() : null
+        request.uploadFileHash = fileHash
+        writeAccessLog(db, {
+          address: request.auth.address,
+          action: 'upload',
+          fileHash,
+          ip: request.ip,
+        })
+        next()
+      } catch (error) {
+        next(error)
+      }
     },
     async (request, response) => {
       if (!request.file) {
-        const error = new Error("Multipart field 'file' is required")
-        error.status = 400
-        error.code = 'BAD_REQUEST'
-        throw error
+        throw new AppError(400, 'BAD_REQUEST', "Multipart field 'file' is required")
       }
-      const kind = parse(
-        z.enum(['evidence', 'certificate']),
-        request.body?.kind === undefined ? 'evidence' : request.body.kind,
-      )
+      const kind = request.uploadKind
       const address = request.auth.address
       const fileHash = request.uploadFileHash
       const existing = getFile.get(fileHash)
+
       if (existing) {
         if (existing.uploader.toLowerCase() !== address.toLowerCase()) {
-          throw conflict('A file with this hash was uploaded by another wallet')
+          throw new AppError(409, 'FILE_EXISTS', 'A file with this hash was uploaded by another wallet')
         }
         return response.status(200).json(fileResponse(existing))
       }
+
       const metadata = {
         file_hash: fileHash,
         uploader: address,
         original_name: sanitizeFilename(request.file.originalname),
-        mime_type: request.file.mimetype || 'application/octet-stream',
+        mime: request.file.mimetype || 'application/octet-stream',
         size: request.file.size,
         kind,
+        evidence_id: null,
         created_at: new Date().toISOString(),
       }
+
       await fs.mkdir(config.storageDir, { recursive: true })
       const finalPath = storagePath(config.storageDir, fileHash)
       const temporaryPath = `${finalPath}.${process.pid}.${randomBytes(8).toString('hex')}.tmp`
+
       try {
         await fs.writeFile(temporaryPath, encrypt(request.file.buffer, config.masterKey, fileHash), {
           flag: 'wx',
@@ -121,22 +164,26 @@ export function createFilesRouter({ db, chain, config }) {
         })
         await fs.rename(temporaryPath, finalPath)
       } catch (error) {
-        await fs.rm(temporaryPath, { force: true }).catch(() => {})
+        await fs.rm(temporaryPath, { force: true }).catch((cleanupError) => {
+          console.error('Temporary encrypted file cleanup failed:', cleanupError.code || 'UNKNOWN')
+        })
         throw error
       }
+
       try {
         db.prepare(`
-          INSERT INTO files(file_hash, uploader, original_name, mime_type, size, kind, created_at)
-          VALUES (@file_hash, @uploader, @original_name, @mime_type, @size, @kind, @created_at)
+          INSERT INTO files(file_hash, uploader, original_name, mime, size, kind, evidence_id, created_at)
+          VALUES (@file_hash, @uploader, @original_name, @mime, @size, @kind, @evidence_id, @created_at)
         `).run(metadata)
       } catch (error) {
         const raced = getFile.get(fileHash)
         if (!raced) throw error
         if (raced.uploader.toLowerCase() !== address.toLowerCase()) {
-          throw conflict('A file with this hash was uploaded by another wallet')
+          throw new AppError(409, 'FILE_EXISTS', 'A file with this hash was uploaded by another wallet')
         }
         return response.status(200).json(fileResponse(raced))
       }
+
       response.status(201).json(fileResponse(metadata))
     },
   )
@@ -145,36 +192,44 @@ export function createFilesRouter({ db, chain, config }) {
     const fileHash = normalizedHash(request.params.fileHash)
     const evidenceId = parse(evidenceIdInputSchema, request.body?.evidenceId)
     const file = getFile.get(fileHash)
+
     if (!file) throw notFound('Uploaded file was not found')
     if (file.uploader.toLowerCase() !== request.auth.address.toLowerCase()) {
       throw forbidden('Only the wallet that uploaded this file can link it')
     }
-    await chain.verifyLinkedFile(evidenceId, fileHash, request.auth.address, file.kind)
-    const existing = getLink.get(fileHash)
-    if (existing && existing.evidence_id !== evidenceId) {
-      throw conflict('This file is already linked to another evidence record')
+
+    const matches = await chain.verifyLinkedFile(evidenceId, fileHash, request.auth.address, file.kind)
+    if (!matches) {
+      throw badRequest('HASH_MISMATCH: The hash does not match the on-chain evidence record for this document kind')
     }
+
+    db.prepare('UPDATE files SET evidence_id = ? WHERE file_hash = ?').run(String(evidenceId), fileHash)
     db.prepare(`
       INSERT INTO file_links(file_hash, evidence_id, created_at)
       VALUES (?, ?, ?)
-      ON CONFLICT(file_hash) DO NOTHING
-    `).run(fileHash, evidenceId, new Date().toISOString())
-    response.json({ fileHash, evidenceId, linked: true })
+      ON CONFLICT(file_hash) DO UPDATE SET evidence_id = excluded.evidence_id
+    `).run(fileHash, String(evidenceId), new Date().toISOString())
+
+    response.json({ fileHash, evidenceId: String(evidenceId), linked: true })
   })
 
   router.get('/:fileHash/verify', async (request, response) => {
     const fileHash = normalizedHash(request.params.fileHash)
     writeAccessLog(db, { address: request.auth.address, action: 'verify', fileHash, ip: request.ip })
-    const access = await canAccess({ db, chain, fileHash, address: request.auth.address })
+    const access = await canAccess({ db, chain, fileHash, address: request.auth.address, ip: request.ip })
     const file = access.file
+
     let plaintext
     try {
       plaintext = await decryptFromDisk(config.storageDir, config.masterKey, fileHash)
     } catch (error) {
-      if (!isIntegrityError(error)) throw unavailable(`Could not read encrypted evidence: ${error.message}`)
+      if (!isIntegrityError(error)) {
+        if (error.code === 'ENOENT') throw notFound('Encrypted file was not found')
+        throw unavailable(`Could not read encrypted evidence: ${error.message}`)
+      }
       const onChain = access.evidenceId
-        ? await chain.onChainVerify(access.evidenceId, fileHash, request.auth.address)
-        : { registered: false, evidenceId: null, matches: false }
+        ? await chain.onChainVerify(access.evidenceId, null, request.auth.address, file.kind)
+        : { registered: false, evidenceId: null, matches: false, review: null }
       return response.json({
         fileHash,
         recomputedHash: null,
@@ -184,18 +239,23 @@ export function createFilesRouter({ db, chain, config }) {
         message: 'stored file altered or corrupted',
       })
     }
+
     const recomputedHash = sha256(plaintext).toLowerCase()
     const matchesStoredHash = recomputedHash === fileHash
     const onChain = access.evidenceId
-      ? await chain.onChainVerify(access.evidenceId, fileHash, request.auth.address)
-      : { registered: false, evidenceId: null, matches: false }
+      ? await chain.onChainVerify(access.evidenceId, recomputedHash, request.auth.address, file.kind)
+      : { registered: false, evidenceId: null, matches: false, review: null }
+
     response.json({ fileHash, recomputedHash, readable: true, matchesStoredHash, onChain })
   })
 
   router.get('/:fileHash', async (request, response) => {
     const fileHash = normalizedHash(request.params.fileHash)
-    writeAccessLog(db, { address: request.auth.address, action: 'download', fileHash, ip: request.ip })
-    const { file } = await canAccess({ db, chain, fileHash, address: request.auth.address })
+    const { file, role } = await canAccess({ db, chain, fileHash, address: request.auth.address, ip: request.ip })
+    if (role !== 'Admin') {
+      writeAccessLog(db, { address: request.auth.address, action: 'download', fileHash, ip: request.ip })
+    }
+
     let plaintext
     try {
       plaintext = await decryptFromDisk(config.storageDir, config.masterKey, fileHash)
@@ -209,13 +269,62 @@ export function createFilesRouter({ db, chain, config }) {
       if (error.code === 'ENOENT') throw notFound('Encrypted file was not found')
       throw unavailable(`Could not read encrypted evidence: ${error.message}`)
     }
+
     response
       .set('X-Content-Type-Options', 'nosniff')
-      .type(file.mime_type || 'application/octet-stream')
+      .set('Cache-Control', 'no-store')
+      .type(file.mime || 'application/octet-stream')
       .attachment(file.original_name)
       .send(plaintext)
   })
 
+  return router
+}
+
+export function createEvidenceFilesRouter({ db, chain }) {
+  const router = Router()
+  router.get('/:id/files', async (request, response) => {
+    const evidenceId = parse(evidenceIdInputSchema, request.params.id)
+    const user = request.auth.address
+    if (request.auth.role === 'Admin') {
+      writeAccessLog(db, {
+        address: user,
+        action: 'admin_review',
+        fileHash: null,
+        ip: request.ip,
+      })
+    }
+
+    // First call getEvidence.staticCall(id, { from: user })
+    const ev = await chain.getEvidence(evidenceId, user)
+    if (!ev) {
+      throw notFound('Evidence not found')
+    }
+
+    // Return the main evidence file plus all files linked to this evidence id
+    const mainHash = String(ev.fileHash).toLowerCase()
+    const linkedFiles = db.prepare('SELECT * FROM files WHERE evidence_id = ? OR file_hash = ?').all(String(evidenceId), mainHash)
+
+    const result = linkedFiles.map((f) => ({
+      fileHash: f.file_hash,
+      kind: f.kind,
+      name: f.original_name,
+      size: f.size,
+      uploader: f.uploader,
+    }))
+    if (request.auth.role === 'Admin') {
+      for (const file of result) {
+        writeAccessLog(db, {
+          address: user,
+          action: 'admin_review',
+          fileHash: file.fileHash,
+          ip: request.ip,
+        })
+      }
+    }
+
+    response.json({ evidenceId: String(evidenceId), files: result })
+  })
   return router
 }
 
@@ -240,10 +349,12 @@ export function createTamperRouter({ db, config }) {
     bytes[bytes.length - 1] ^= 0x01
     const tempPath = `${encryptedPath}.${process.pid}.${randomBytes(8).toString('hex')}.tmp`
     try {
-      await fs.writeFile(tempPath, bytes, { flag: 'wx', mode: 0o600 })
+      await fs.writeFile(tempPath, bytes, { flag: 'wx' })
       await fs.rename(tempPath, encryptedPath)
     } finally {
-      await fs.rm(tempPath, { force: true }).catch(() => {})
+      await fs.rm(tempPath, { force: true }).catch((error) => {
+        console.error('Temporary encrypted file cleanup failed:', error.code || 'UNKNOWN')
+      })
     }
     writeAccessLog(db, { address: request.auth.address, action: 'tamper', fileHash, ip: request.ip })
     response.json({ fileHash, tampered: true })
@@ -251,20 +362,60 @@ export function createTamperRouter({ db, config }) {
   return router
 }
 
-export async function canAccess({ db, chain, fileHash, address }) {
-  const file = db.prepare('SELECT * FROM files WHERE file_hash = ?').get(fileHash)
-  if (!file) throw notFound('File metadata was not found')
-  const role = await chain.getRole(address)
-  if (role === 'Admin' || role === 'None') throw forbidden('This wallet cannot access evidence files')
-  const directId = await chain.hashToId(fileHash)
-  const linkedId = db.prepare('SELECT evidence_id FROM file_links WHERE file_hash = ?').get(fileHash)?.evidence_id
-  const evidenceId = directId !== '0' ? directId : linkedId || null
-  if (!evidenceId) {
-    if (file.uploader.toLowerCase() !== address.toLowerCase()) throw forbidden()
-    return { file, evidenceId: null }
+export async function canAccess({ db, chain, fileHash, address, ip }) {
+  const checksumAddress = getAddress(address)
+  const role = await resolveUserRole(chain, checksumAddress)
+
+  // Look up file
+  const file = db.prepare('SELECT * FROM files WHERE file_hash = ?').get(fileHash.toLowerCase())
+  if (!file) {
+    throw notFound('File metadata was not found')
   }
-  if (!(await chain.canView(evidenceId, address))) throw forbidden()
-  return { file, evidenceId }
+  if (role === 'Admin') {
+    writeAccessLog(db, { address: checksumAddress, action: 'admin_review', fileHash, ip })
+  }
+
+  // Rule a: kind "profile_doc"
+  if (file.kind === 'profile_doc') {
+    if (file.uploader.toLowerCase() === checksumAddress.toLowerCase() || role === 'Admin') {
+      return { file, evidenceId: null, evidence: null, role }
+    }
+    throw forbidden('Only the uploader or an admin can access profile documents')
+  }
+
+  // Rule b: Otherwise role must be Investigator, Forensic Analyst, Court Official, or Admin
+  if (!['Investigator', 'Forensic Analyst', 'Court Official', 'Admin'].includes(role)) {
+    throw forbidden('Your current role cannot access evidence files')
+  }
+
+  // Rule c: Find evidence id
+  let evidenceId = null
+  if (file.kind === 'evidence') {
+    const directId = await chain.hashToId(fileHash)
+    if (directId && directId !== '0') evidenceId = directId
+  }
+  if (!evidenceId && file.evidence_id) {
+    evidenceId = file.evidence_id
+  }
+  if (!evidenceId) {
+    const link = db.prepare('SELECT evidence_id FROM file_links WHERE file_hash = ?').get(fileHash.toLowerCase())
+    if (link?.evidence_id) evidenceId = link.evidence_id
+  }
+
+  if (evidenceId && evidenceId !== '0') {
+    const evidence = await chain.getEvidence(evidenceId, checksumAddress)
+    if (evidence) {
+      return { file, evidenceId: String(evidenceId), evidence, role }
+    }
+    // Revert "Evidence not found" -> treat as not registered
+  }
+
+  // Rule d: If not registered on-chain yet: only uploader may access
+  if (file.uploader.toLowerCase() !== checksumAddress.toLowerCase()) {
+    throw forbidden('Only the uploader can access unlinked files')
+  }
+
+  return { file, evidenceId: null, evidence: null, role }
 }
 
 async function decryptFromDisk(storageDir, masterKey, fileHash) {
@@ -290,10 +441,12 @@ function fileResponse(file) {
 }
 
 function isIntegrityError(error) {
-  return error instanceof Error && (
-    error.message === 'Unsupported or truncated encrypted file' ||
-    error.code === 'ERR_OSSL_EVP_BAD_DECRYPT' ||
-    error.code === 'ERR_CRYPTO_INVALID_AUTH_TAG' ||
-    error.message.toLowerCase().includes('authenticate')
+  return (
+    error instanceof Error &&
+    (error.message === 'Unsupported or truncated encrypted file' ||
+      error.code === 'ERR_OSSL_EVP_BAD_DECRYPT' ||
+      error.code === 'ERR_CRYPTO_INVALID_AUTH_TAG' ||
+      error.message.toLowerCase().includes('authenticate') ||
+      error.message.toLowerCase().includes('auth tag'))
   )
 }

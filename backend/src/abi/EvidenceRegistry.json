@@ -1,29 +1,87 @@
 [
   {
-    "inputs": [],
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "adminMultisig",
+        "type": "address"
+      },
+      {
+        "internalType": "address",
+        "name": "peopleRegistry",
+        "type": "address"
+      }
+    ],
     "stateMutability": "nonpayable",
     "type": "constructor"
   },
   {
-    "inputs": [],
-    "name": "AccessControlBadConfirmation",
-    "type": "error"
-  },
-  {
+    "anonymous": false,
     "inputs": [
       {
+        "indexed": true,
+        "internalType": "uint256",
+        "name": "id",
+        "type": "uint256"
+      },
+      {
+        "indexed": true,
         "internalType": "address",
-        "name": "account",
+        "name": "analyst",
         "type": "address"
       },
       {
+        "indexed": false,
         "internalType": "bytes32",
-        "name": "neededRole",
+        "name": "reportHash",
         "type": "bytes32"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint256",
+        "name": "timestamp",
+        "type": "uint256"
       }
     ],
-    "name": "AccessControlUnauthorizedAccount",
-    "type": "error"
+    "name": "AnalysisReportAdded",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "bytes32",
+        "name": "caseKey",
+        "type": "bytes32"
+      },
+      {
+        "indexed": true,
+        "internalType": "uint256",
+        "name": "labId",
+        "type": "uint256"
+      },
+      {
+        "indexed": true,
+        "internalType": "address",
+        "name": "by",
+        "type": "address"
+      },
+      {
+        "indexed": false,
+        "internalType": "string",
+        "name": "note",
+        "type": "string"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint256",
+        "name": "timestamp",
+        "type": "uint256"
+      }
+    ],
+    "name": "AnalysisRequested",
+    "type": "event"
   },
   {
     "anonymous": false,
@@ -38,12 +96,6 @@
         "indexed": true,
         "internalType": "address",
         "name": "analyst",
-        "type": "address"
-      },
-      {
-        "indexed": true,
-        "internalType": "address",
-        "name": "by",
         "type": "address"
       },
       {
@@ -72,12 +124,6 @@
         "type": "address"
       },
       {
-        "indexed": true,
-        "internalType": "address",
-        "name": "by",
-        "type": "address"
-      },
-      {
         "indexed": false,
         "internalType": "uint256",
         "name": "timestamp",
@@ -92,9 +138,9 @@
     "inputs": [
       {
         "indexed": true,
-        "internalType": "bytes32",
+        "internalType": "uint256",
         "name": "courtId",
-        "type": "bytes32"
+        "type": "uint256"
       },
       {
         "indexed": true,
@@ -135,9 +181,9 @@
     "inputs": [
       {
         "indexed": true,
-        "internalType": "bytes32",
+        "internalType": "uint256",
         "name": "courtId",
-        "type": "bytes32"
+        "type": "uint256"
       },
       {
         "indexed": true,
@@ -172,18 +218,24 @@
     "inputs": [
       {
         "indexed": true,
-        "internalType": "bytes32",
-        "name": "courtId",
-        "type": "bytes32"
+        "internalType": "uint256",
+        "name": "id",
+        "type": "uint256"
       },
       {
         "indexed": true,
         "internalType": "address",
-        "name": "official",
+        "name": "by",
         "type": "address"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint256",
+        "name": "timestamp",
+        "type": "uint256"
       }
     ],
-    "name": "CourtOfficialAssigned",
+    "name": "CustodyOfferCancelled",
     "type": "event"
   },
   {
@@ -191,24 +243,36 @@
     "inputs": [
       {
         "indexed": true,
-        "internalType": "bytes32",
-        "name": "courtId",
-        "type": "bytes32"
+        "internalType": "uint256",
+        "name": "id",
+        "type": "uint256"
+      },
+      {
+        "indexed": true,
+        "internalType": "address",
+        "name": "from",
+        "type": "address"
+      },
+      {
+        "indexed": true,
+        "internalType": "address",
+        "name": "to",
+        "type": "address"
       },
       {
         "indexed": false,
         "internalType": "string",
-        "name": "name",
+        "name": "reason",
         "type": "string"
       },
       {
         "indexed": false,
-        "internalType": "string",
-        "name": "location",
-        "type": "string"
+        "internalType": "uint256",
+        "name": "timestamp",
+        "type": "uint256"
       }
     ],
-    "name": "CourtRegistered",
+    "name": "CustodyOffered",
     "type": "event"
   },
   {
@@ -237,12 +301,6 @@
         "internalType": "enum EvidenceRegistry.Stage",
         "name": "stage",
         "type": "uint8"
-      },
-      {
-        "indexed": false,
-        "internalType": "string",
-        "name": "reason",
-        "type": "string"
       },
       {
         "indexed": false,
@@ -296,9 +354,9 @@
       },
       {
         "indexed": true,
-        "internalType": "bytes32",
+        "internalType": "uint256",
         "name": "courtId",
-        "type": "bytes32"
+        "type": "uint256"
       },
       {
         "indexed": true,
@@ -325,7 +383,38 @@
         "type": "uint256"
       }
     ],
-    "name": "EvidenceRegistered",
+    "name": "EvidenceApproved",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "uint256",
+        "name": "id",
+        "type": "uint256"
+      },
+      {
+        "indexed": true,
+        "internalType": "address",
+        "name": "collector",
+        "type": "address"
+      },
+      {
+        "indexed": false,
+        "internalType": "string",
+        "name": "reason",
+        "type": "string"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint256",
+        "name": "timestamp",
+        "type": "uint256"
+      }
+    ],
+    "name": "EvidenceRejected",
     "type": "event"
   },
   {
@@ -376,9 +465,46 @@
       },
       {
         "indexed": true,
+        "internalType": "address",
+        "name": "collector",
+        "type": "address"
+      },
+      {
+        "indexed": true,
         "internalType": "bytes32",
-        "name": "courtId",
+        "name": "caseKey",
         "type": "bytes32"
+      },
+      {
+        "indexed": false,
+        "internalType": "bytes32",
+        "name": "fileHash",
+        "type": "bytes32"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint256",
+        "name": "timestamp",
+        "type": "uint256"
+      }
+    ],
+    "name": "EvidenceSubmittedForReview",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "uint256",
+        "name": "id",
+        "type": "uint256"
+      },
+      {
+        "indexed": true,
+        "internalType": "uint256",
+        "name": "courtId",
+        "type": "uint256"
       },
       {
         "indexed": true,
@@ -428,130 +554,65 @@
     "type": "event"
   },
   {
-    "anonymous": false,
     "inputs": [
       {
-        "indexed": true,
-        "internalType": "bytes32",
-        "name": "role",
-        "type": "bytes32"
-      },
-      {
-        "indexed": true,
-        "internalType": "bytes32",
-        "name": "previousAdminRole",
-        "type": "bytes32"
-      },
-      {
-        "indexed": true,
-        "internalType": "bytes32",
-        "name": "newAdminRole",
-        "type": "bytes32"
+        "internalType": "uint256",
+        "name": "id",
+        "type": "uint256"
       }
     ],
-    "name": "RoleAdminChanged",
-    "type": "event"
+    "name": "acceptCustody",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
   },
   {
-    "anonymous": false,
     "inputs": [
       {
-        "indexed": true,
+        "internalType": "uint256",
+        "name": "id",
+        "type": "uint256"
+      },
+      {
         "internalType": "bytes32",
-        "name": "role",
+        "name": "reportHash",
         "type": "bytes32"
       },
       {
-        "indexed": true,
-        "internalType": "address",
-        "name": "account",
-        "type": "address"
-      },
-      {
-        "indexed": true,
-        "internalType": "address",
-        "name": "sender",
-        "type": "address"
+        "internalType": "string",
+        "name": "note",
+        "type": "string"
       }
     ],
-    "name": "RoleGranted",
-    "type": "event"
-  },
-  {
-    "anonymous": false,
-    "inputs": [
-      {
-        "indexed": true,
-        "internalType": "bytes32",
-        "name": "role",
-        "type": "bytes32"
-      },
-      {
-        "indexed": true,
-        "internalType": "address",
-        "name": "account",
-        "type": "address"
-      },
-      {
-        "indexed": true,
-        "internalType": "address",
-        "name": "sender",
-        "type": "address"
-      }
-    ],
-    "name": "RoleRevoked",
-    "type": "event"
+    "name": "addAnalysisReport",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
   },
   {
     "inputs": [],
-    "name": "COURT_ROLE",
+    "name": "admins",
     "outputs": [
       {
-        "internalType": "bytes32",
+        "internalType": "contract AdminMultisig",
         "name": "",
-        "type": "bytes32"
+        "type": "address"
       }
     ],
     "stateMutability": "view",
     "type": "function"
   },
   {
-    "inputs": [],
-    "name": "DEFAULT_ADMIN_ROLE",
-    "outputs": [
+    "inputs": [
       {
-        "internalType": "bytes32",
-        "name": "",
-        "type": "bytes32"
+        "internalType": "uint256",
+        "name": "id",
+        "type": "uint256"
       }
     ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [],
-    "name": "FORENSIC_ROLE",
-    "outputs": [
-      {
-        "internalType": "bytes32",
-        "name": "",
-        "type": "bytes32"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [],
-    "name": "INVESTIGATOR_ROLE",
-    "outputs": [
-      {
-        "internalType": "bytes32",
-        "name": "",
-        "type": "bytes32"
-      }
-    ],
-    "stateMutability": "view",
+    "name": "approveEvidence",
+    "outputs": [],
+    "stateMutability": "nonpayable",
     "type": "function"
   },
   {
@@ -575,17 +636,12 @@
   {
     "inputs": [
       {
-        "internalType": "address",
-        "name": "official",
-        "type": "address"
-      },
-      {
-        "internalType": "bytes32",
-        "name": "courtId",
-        "type": "bytes32"
+        "internalType": "uint256",
+        "name": "id",
+        "type": "uint256"
       }
     ],
-    "name": "assignCourtOfficial",
+    "name": "cancelCustodyOffer",
     "outputs": [],
     "stateMutability": "nonpayable",
     "type": "function"
@@ -624,28 +680,9 @@
   {
     "inputs": [
       {
-        "internalType": "bytes32",
-        "name": "",
-        "type": "bytes32"
-      }
-    ],
-    "name": "courtLocation",
-    "outputs": [
-      {
-        "internalType": "string",
-        "name": "",
-        "type": "string"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "bytes32",
-        "name": "",
-        "type": "bytes32"
+        "internalType": "uint256",
+        "name": "courtId",
+        "type": "uint256"
       }
     ],
     "name": "courtName",
@@ -675,6 +712,70 @@
     "name": "flagEvidence",
     "outputs": [],
     "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "id",
+        "type": "uint256"
+      },
+      {
+        "internalType": "address",
+        "name": "newHolder",
+        "type": "address"
+      },
+      {
+        "internalType": "string",
+        "name": "reason",
+        "type": "string"
+      }
+    ],
+    "name": "forceReassign",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "id",
+        "type": "uint256"
+      }
+    ],
+    "name": "getAnalysisReports",
+    "outputs": [
+      {
+        "components": [
+          {
+            "internalType": "address",
+            "name": "analyst",
+            "type": "address"
+          },
+          {
+            "internalType": "bytes32",
+            "name": "reportHash",
+            "type": "bytes32"
+          },
+          {
+            "internalType": "string",
+            "name": "note",
+            "type": "string"
+          },
+          {
+            "internalType": "uint256",
+            "name": "timestamp",
+            "type": "uint256"
+          }
+        ],
+        "internalType": "struct EvidenceRegistry.Report[]",
+        "name": "",
+        "type": "tuple[]"
+      }
+    ],
+    "stateMutability": "view",
     "type": "function"
   },
   {
@@ -719,14 +820,14 @@
             "type": "string"
           },
           {
-            "internalType": "string",
-            "name": "location",
-            "type": "string"
+            "internalType": "uint256",
+            "name": "stationId",
+            "type": "uint256"
           },
           {
-            "internalType": "bytes32",
+            "internalType": "uint256",
             "name": "courtId",
-            "type": "bytes32"
+            "type": "uint256"
           },
           {
             "internalType": "address",
@@ -795,11 +896,6 @@
             "type": "bytes32"
           },
           {
-            "internalType": "bytes32",
-            "name": "certificateHash",
-            "type": "bytes32"
-          },
-          {
             "internalType": "address",
             "name": "collector",
             "type": "address"
@@ -820,6 +916,11 @@
             "type": "uint8"
           },
           {
+            "internalType": "enum EvidenceRegistry.Review",
+            "name": "review",
+            "type": "uint8"
+          },
+          {
             "internalType": "uint256",
             "name": "createdAt",
             "type": "uint256"
@@ -828,53 +929,6 @@
         "internalType": "struct EvidenceRegistry.Evidence[]",
         "name": "",
         "type": "tuple[]"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "string",
-        "name": "location",
-        "type": "string"
-      }
-    ],
-    "name": "getCourtForLocation",
-    "outputs": [
-      {
-        "internalType": "bytes32",
-        "name": "id",
-        "type": "bytes32"
-      },
-      {
-        "internalType": "string",
-        "name": "name",
-        "type": "string"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [],
-    "name": "getCourts",
-    "outputs": [
-      {
-        "internalType": "bytes32[]",
-        "name": "ids",
-        "type": "bytes32[]"
-      },
-      {
-        "internalType": "string[]",
-        "name": "names",
-        "type": "string[]"
-      },
-      {
-        "internalType": "string[]",
-        "name": "locs",
-        "type": "string[]"
       }
     ],
     "stateMutability": "view",
@@ -892,6 +946,11 @@
     "outputs": [
       {
         "components": [
+          {
+            "internalType": "enum EvidenceRegistry.Action",
+            "name": "action",
+            "type": "uint8"
+          },
           {
             "internalType": "address",
             "name": "from",
@@ -969,11 +1028,6 @@
             "type": "bytes32"
           },
           {
-            "internalType": "bytes32",
-            "name": "certificateHash",
-            "type": "bytes32"
-          },
-          {
             "internalType": "address",
             "name": "collector",
             "type": "address"
@@ -994,6 +1048,11 @@
             "type": "uint8"
           },
           {
+            "internalType": "enum EvidenceRegistry.Review",
+            "name": "review",
+            "type": "uint8"
+          },
+          {
             "internalType": "uint256",
             "name": "createdAt",
             "type": "uint256"
@@ -1008,13 +1067,46 @@
     "type": "function"
   },
   {
-    "inputs": [],
-    "name": "getLocations",
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "id",
+        "type": "uint256"
+      }
+    ],
+    "name": "getEvidenceDocs",
     "outputs": [
       {
-        "internalType": "string[]",
+        "components": [
+          {
+            "internalType": "uint64",
+            "name": "seizedAt",
+            "type": "uint64"
+          },
+          {
+            "internalType": "bool",
+            "name": "isElectronic",
+            "type": "bool"
+          },
+          {
+            "internalType": "bytes32",
+            "name": "seizureMemoHash",
+            "type": "bytes32"
+          },
+          {
+            "internalType": "bytes32",
+            "name": "recordingHash",
+            "type": "bytes32"
+          },
+          {
+            "internalType": "bytes32",
+            "name": "certificateHash",
+            "type": "bytes32"
+          }
+        ],
+        "internalType": "struct EvidenceRegistry.Docs",
         "name": "",
-        "type": "string[]"
+        "type": "tuple"
       }
     ],
     "stateMutability": "view",
@@ -1037,14 +1129,14 @@
             "type": "string"
           },
           {
-            "internalType": "string",
-            "name": "location",
-            "type": "string"
+            "internalType": "uint256",
+            "name": "stationId",
+            "type": "uint256"
           },
           {
-            "internalType": "bytes32",
+            "internalType": "uint256",
             "name": "courtId",
-            "type": "bytes32"
+            "type": "uint256"
           },
           {
             "internalType": "address",
@@ -1084,19 +1176,13 @@
     "type": "function"
   },
   {
-    "inputs": [
-      {
-        "internalType": "bytes32",
-        "name": "role",
-        "type": "bytes32"
-      }
-    ],
-    "name": "getRoleAdmin",
+    "inputs": [],
+    "name": "getPendingEvidence",
     "outputs": [
       {
-        "internalType": "bytes32",
+        "internalType": "uint256[]",
         "name": "",
-        "type": "bytes32"
+        "type": "uint256[]"
       }
     ],
     "stateMutability": "view",
@@ -1166,48 +1252,6 @@
     "inputs": [
       {
         "internalType": "bytes32",
-        "name": "role",
-        "type": "bytes32"
-      },
-      {
-        "internalType": "address",
-        "name": "account",
-        "type": "address"
-      }
-    ],
-    "name": "grantRole",
-    "outputs": [],
-    "stateMutability": "nonpayable",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "bytes32",
-        "name": "role",
-        "type": "bytes32"
-      },
-      {
-        "internalType": "address",
-        "name": "account",
-        "type": "address"
-      }
-    ],
-    "name": "hasRole",
-    "outputs": [
-      {
-        "internalType": "bool",
-        "name": "",
-        "type": "bool"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "bytes32",
         "name": "",
         "type": "bytes32"
       }
@@ -1245,16 +1289,16 @@
     "inputs": [
       {
         "internalType": "address",
-        "name": "",
+        "name": "a",
         "type": "address"
       }
     ],
     "name": "officialCourt",
     "outputs": [
       {
-        "internalType": "bytes32",
+        "internalType": "uint256",
         "name": "",
-        "type": "bytes32"
+        "type": "uint256"
       }
     ],
     "stateMutability": "view",
@@ -1271,16 +1315,43 @@
         "internalType": "string",
         "name": "title",
         "type": "string"
-      },
-      {
-        "internalType": "string",
-        "name": "location",
-        "type": "string"
       }
     ],
     "name": "openCase",
     "outputs": [],
     "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "name": "pendingTo",
+    "outputs": [
+      {
+        "internalType": "address",
+        "name": "",
+        "type": "address"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "people",
+    "outputs": [
+      {
+        "internalType": "contract PeopleRegistry",
+        "name": "",
+        "type": "address"
+      }
+    ],
+    "stateMutability": "view",
     "type": "function"
   },
   {
@@ -1304,24 +1375,6 @@
         "type": "bool"
       }
     ],
-    "stateMutability": "nonpayable",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "string",
-        "name": "name",
-        "type": "string"
-      },
-      {
-        "internalType": "string",
-        "name": "location",
-        "type": "string"
-      }
-    ],
-    "name": "registerCourt",
-    "outputs": [],
     "stateMutability": "nonpayable",
     "type": "function"
   },
@@ -1355,9 +1408,36 @@
             "type": "bytes32"
           },
           {
-            "internalType": "bytes32",
-            "name": "certificateHash",
-            "type": "bytes32"
+            "components": [
+              {
+                "internalType": "uint64",
+                "name": "seizedAt",
+                "type": "uint64"
+              },
+              {
+                "internalType": "bool",
+                "name": "isElectronic",
+                "type": "bool"
+              },
+              {
+                "internalType": "bytes32",
+                "name": "seizureMemoHash",
+                "type": "bytes32"
+              },
+              {
+                "internalType": "bytes32",
+                "name": "recordingHash",
+                "type": "bytes32"
+              },
+              {
+                "internalType": "bytes32",
+                "name": "certificateHash",
+                "type": "bytes32"
+              }
+            ],
+            "internalType": "struct EvidenceRegistry.Docs",
+            "name": "docs",
+            "type": "tuple"
           }
         ],
         "internalType": "struct EvidenceRegistry.NewEvidence",
@@ -1397,6 +1477,24 @@
   {
     "inputs": [
       {
+        "internalType": "uint256",
+        "name": "id",
+        "type": "uint256"
+      },
+      {
+        "internalType": "string",
+        "name": "reason",
+        "type": "string"
+      }
+    ],
+    "name": "rejectEvidence",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
         "internalType": "string",
         "name": "caseId",
         "type": "string"
@@ -1415,19 +1513,43 @@
   {
     "inputs": [
       {
-        "internalType": "bytes32",
-        "name": "role",
-        "type": "bytes32"
+        "internalType": "string",
+        "name": "caseId",
+        "type": "string"
       },
       {
-        "internalType": "address",
-        "name": "callerConfirmation",
-        "type": "address"
+        "internalType": "uint256",
+        "name": "labId",
+        "type": "uint256"
+      },
+      {
+        "internalType": "string",
+        "name": "note",
+        "type": "string"
       }
     ],
-    "name": "renounceRole",
+    "name": "requestAnalysis",
     "outputs": [],
     "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "bytes32",
+        "name": "",
+        "type": "bytes32"
+      }
+    ],
+    "name": "requestedLabForCase",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "view",
     "type": "function"
   },
   {
@@ -1469,17 +1591,22 @@
   {
     "inputs": [
       {
-        "internalType": "bytes32",
-        "name": "role",
-        "type": "bytes32"
+        "internalType": "uint256",
+        "name": "id",
+        "type": "uint256"
       },
       {
         "internalType": "address",
-        "name": "account",
+        "name": "to",
         "type": "address"
+      },
+      {
+        "internalType": "string",
+        "name": "reason",
+        "type": "string"
       }
     ],
-    "name": "revokeRole",
+    "name": "sendCustody",
     "outputs": [],
     "stateMutability": "nonpayable",
     "type": "function"
@@ -1498,48 +1625,6 @@
       }
     ],
     "name": "submitToCourt",
-    "outputs": [],
-    "stateMutability": "nonpayable",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "bytes4",
-        "name": "interfaceId",
-        "type": "bytes4"
-      }
-    ],
-    "name": "supportsInterface",
-    "outputs": [
-      {
-        "internalType": "bool",
-        "name": "",
-        "type": "bool"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "uint256",
-        "name": "id",
-        "type": "uint256"
-      },
-      {
-        "internalType": "address",
-        "name": "newHolder",
-        "type": "address"
-      },
-      {
-        "internalType": "string",
-        "name": "reason",
-        "type": "string"
-      }
-    ],
-    "name": "transferCustody",
     "outputs": [],
     "stateMutability": "nonpayable",
     "type": "function"
